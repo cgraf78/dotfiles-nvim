@@ -19,8 +19,10 @@ nvim_test_merges() {
   mkdir -p "$api_home/.local/lib/dotfiles/merge-hooks.d/lib"
   cp "$source_home/.local/lib/dotfiles/merge-hooks.d/nvim.sh" \
     "$api_home/.local/lib/dotfiles/merge-hooks.d/nvim.sh"
-  cp "$active_home/.local/lib/dotfiles/merge-hooks.d/lib/compat.sh" \
-    "$api_home/.local/lib/dotfiles/merge-hooks.d/lib/compat.sh"
+  cat >"$api_home/.local/lib/dotfiles/merge-hooks.d/lib/compat.sh" <<'EOF'
+# Minimal inherited compatibility surface for the owner-focused API test.
+_dot_tool_present() { dot_tool_present "$@"; }
+EOF
   for support in windows.sh agent-playbooks.sh shdeps-assets.sh; do
     if [[ -f $active_home/.local/lib/dotfiles/merge-hooks.d/lib/$support ]]; then
       cp "$active_home/.local/lib/dotfiles/merge-hooks.d/lib/$support" \
