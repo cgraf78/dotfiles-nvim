@@ -199,8 +199,11 @@ OWNER
 
   mv "$nvim_bin/pgrep" "$nvim_bin/pgrep.disabled"
   : >"$nvim_log"
+  # Keep a host-installed pgrep from defeating this missing-command case.
+  # The WSL marker makes platform detection self-contained before the hook
+  # reaches its direct command lookup.
   HOME="$nvim_home" XDG_STATE_HOME="$nvim_state" XDG_DATA_HOME="$nvim_data" \
-    PATH="$nvim_bin:$PATH" DOT_TEST_NVIM_LOCK="$nvim_lock" \
+    WSL_DISTRO_NAME=fixture PATH="$nvim_bin" DOT_TEST_NVIM_LOCK="$nvim_lock" \
     DOT_TEST_NVIM_LOG="$nvim_log" DOT_TEST_PGREP_STATUS=1 \
     _run_nvim_merge_for_test
   _assert_eq "nvim merge: skips when it cannot prove the editor is idle" \
