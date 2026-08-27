@@ -5,6 +5,21 @@ nvim_test_launchers() {
   local nvim_launcher_home nvim_launcher_cwd nvim_launcher_provider
   local nvim_reuse_home nvim_missing_rc nvim_missing_output
 
+  _nvim_launcher_test_shdeps() {
+    local home=$1
+    [[ ${DOT_PROFILE_FIXTURE:-0} == 1 ]] || return 0
+    mkdir -p "$home/.local/bin"
+    cat >"$home/.local/bin/shdeps" <<'SHDEPS'
+#!/usr/bin/env bash
+[[ ${DOT_SHDEPS_TEST_MISSING:-0} != 1 ]] || exit 1
+[[ ${1:-} == dep-file && ${2:-} == cgraf78/termnav &&
+  ${3:-} == lib/termnav/nvim-open/launcher.sh ]] || exit 1
+[[ -r ${NVIM_LAUNCHER_PROVIDER:-} ]] || exit 1
+printf '%s\n' "$NVIM_LAUNCHER_PROVIDER"
+SHDEPS
+    chmod +x "$home/.local/bin/shdeps"
+  }
+
   nvim_test_assert 'Neovim launcher is executable' test -x "$launcher"
   nvim_test_not_contains 'Neovim launcher does not search for alternate editors' \
     '_dot_launcher_find_real' "$launcher"
@@ -13,6 +28,7 @@ nvim_test_launchers() {
   nvim_launcher_cwd="$nvim_launcher_home/project"
   nvim_launcher_provider="$nvim_launcher_home/termnav-nvim-launcher.sh"
   mkdir -p "$nvim_launcher_home/.local/share/neovim/neovim/bin" "$nvim_launcher_cwd"
+  _nvim_launcher_test_shdeps "$nvim_launcher_home"
 
   cat >"$nvim_launcher_home/.local/share/neovim/neovim/bin/nvim" <<'MOCK'
 #!/usr/bin/env bash
@@ -36,6 +52,7 @@ MOCK
     "provider:$nvim_launcher_cwd:src/app.lua" "$result"
 
   nvim_reuse_home=$(_tmpdir)
+  _nvim_launcher_test_shdeps "$nvim_reuse_home"
   result=$(
     cd "$nvim_launcher_cwd" || exit
     HOME="$nvim_reuse_home" NVIM_LAUNCHER_PROVIDER="$nvim_launcher_provider" \
@@ -75,4 +92,5 @@ MOCK
     "127" "$nvim_missing_rc"
   _assert_contains "nvim launcher: missing Termnav suggests repair" \
     "run dot update" "$nvim_missing_output"
+  unset -f _nvim_launcher_test_shdeps
 }

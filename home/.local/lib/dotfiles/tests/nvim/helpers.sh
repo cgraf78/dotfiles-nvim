@@ -238,6 +238,8 @@ _test_load_dot_doctor_api() {
   # shellcheck source=/dev/null
   . "$dot_root/lib/dot/extension-trust.sh"
   # shellcheck source=/dev/null
+  . "$dot_root/lib/dot/repos/overlays.sh"
+  # shellcheck source=/dev/null
   . "$dot_root/lib/dot/doctor-api.sh"
   dot_doctor_source doctor.d/lib/compat.sh || return 1
 }

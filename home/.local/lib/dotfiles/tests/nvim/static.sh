@@ -6,10 +6,13 @@ nvim_test_static() {
   nvim_test_assert 'Neovim init exists' test -f "$config/init.lua"
   nvim_test_assert 'editor plugin spec exists' test -f "$config/lua/plugins/editor.lua"
   nvim_test_assert 'workspace plugin spec exists' test -f "$config/lua/plugins/workspace.lua"
-  nvim_test_assert 'development coding spec is absent' test ! -e "$config/lua/plugins/coding.lua"
-  nvim_test_assert 'development formatting spec is absent' test ! -e "$config/lua/plugins/formatting.lua"
-  nvim_test_assert 'development linting spec is absent' test ! -e "$config/lua/plugins/linting.lua"
-  nvim_test_assert 'Mason policy is absent' test ! -e "$config/lua/config/mason-policy.lua"
+  if [[ ${DOT_PROFILE_FIXTURE:-0} != 1 ||
+    ${DOT_PROFILE_FIXTURE_PROFILE:-} != dev ]]; then
+    nvim_test_assert 'development coding spec is absent' test ! -e "$config/lua/plugins/coding.lua"
+    nvim_test_assert 'development formatting spec is absent' test ! -e "$config/lua/plugins/formatting.lua"
+    nvim_test_assert 'development linting spec is absent' test ! -e "$config/lua/plugins/linting.lua"
+    nvim_test_assert 'Mason policy is absent' test ! -e "$config/lua/config/mason-policy.lua"
+  fi
   nvim_test_assert 'Copilot config is absent' test ! -e "$config/lua/plugins/copilot.lua"
   nvim_test_not_contains 'editor profile selects no dev-only LazyVim extra' \
     'mason-org|mason-nvim|nvim-dap|copilot|clangd|rust_analyzer|tsserver|none-ls|nvim-lint|conform.nvim' \
