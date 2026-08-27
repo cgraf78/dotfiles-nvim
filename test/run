@@ -91,6 +91,8 @@ system_roots+=(/opt/homebrew/bin /usr/local/bin /usr/bin /bin)
 required_commands=(awk bash basename cat chmod cp cut date dirname env fd find git grep head id jq ln mkdir mkfifo mktemp mv nvim od ps pwd python3 readlink rg rm rmdir sed sh sleep sort stat tail tee tmux touch tr uname wc xargs)
 for command_name in "${required_commands[@]}"; do
   command_path=
+  command_candidates=("$command_name")
+  [[ $command_name != fd ]] || command_candidates+=(fdfind)
   if [[ $command_name == nvim && -n ${CAPABILITY_TEST_NVIM:-} ]]; then
     [[ $CAPABILITY_TEST_NVIM == /* && -x $CAPABILITY_TEST_NVIM && ! -d $CAPABILITY_TEST_NVIM ]] || {
       echo 'CAPABILITY_TEST_NVIM must name an absolute executable' >&2
@@ -100,10 +102,12 @@ for command_name in "${required_commands[@]}"; do
   fi
   for command_root in "${system_roots[@]}"; do
     [[ -z $command_path ]] || break
-    if [[ -x $command_root/$command_name && ! -d $command_root/$command_name ]]; then
-      command_path=$command_root/$command_name
-      break
-    fi
+    for candidate_name in "${command_candidates[@]}"; do
+      if [[ -x $command_root/$candidate_name && ! -d $command_root/$candidate_name ]]; then
+        command_path=$command_root/$candidate_name
+        break
+      fi
+    done
   done
   [[ -n $command_path ]] || {
     echo "missing required fixture command: $command_name" >&2

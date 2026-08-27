@@ -693,6 +693,29 @@ _require_compatible_libc() {
   fi
 }
 
+_nvim_version_at_least() {
+  local bin=$1 minimum_major=$2 minimum_minor=$3 minimum_patch=$4
+  local output version major minor patch
+
+  output=$("$bin" --version 2>/dev/null) || return 1
+  version=${output%%$'\n'*}
+  version=${version#NVIM v}
+  version=${version%%-*}
+  IFS=. read -r major minor patch <<<"$version"
+  [[ $major =~ ^[0-9]+$ && $minor =~ ^[0-9]+$ && $patch =~ ^[0-9]+$ ]] ||
+    return 1
+  ((major > minimum_major)) ||
+    ((major == minimum_major && minor > minimum_minor)) ||
+    ((major == minimum_major && minor == minimum_minor && patch >= minimum_patch))
+}
+
+_require_nvim_version() {
+  local suite=$1 bin=$2
+  if ! _nvim_version_at_least "$bin" 0 11 2; then
+    _test_skip_suite "$suite (requires Neovim 0.11.2 or newer)"
+  fi
+}
+
 # ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------

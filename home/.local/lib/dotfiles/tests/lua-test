@@ -4,6 +4,7 @@ set -u
 
 _test_managed_nvim_bin || exit 1
 nvim_bin=$REPLY
+_require_nvim_version "lua-test" "$nvim_bin"
 fixture=$(_tmpdir)/dot-home
 script=$(_tmpdir)/shdeps-consumer-test.lua
 mkdir -p "$fixture/.config/nvim/lua/config" \
@@ -94,8 +95,12 @@ output=$(DOT_TEST_DEP_FILE_ROOT="$fixture" \
   SHDEPS_LUA_DIR="$fixture/.local/lib/shdeps" \
   SHDEPS_TEST_LOG="$shdeps_log" TEST_HOME="$fixture" \
   "$nvim_bin" --headless --noplugin -u NONE -i NONE -l "$script" 2>&1)
+lua_status=$?
+lua_result=$(printf '%s\n' "$output" | awk \
+  '{ sub(/\r$/, "") } $0 == "ok" { found="ok" } END { print found }')
+_assert_eq "dot-runtime Shdeps validation exits successfully" "0" "$lua_status"
 _assert_eq "dot-runtime resolves, loads, and validates real dependency files through Shdeps" \
-  "ok" "$output"
+  "ok" "$lua_result"
 _assert_eq "dot-runtime caches present roots and retries an initially absent dependency" \
   "$(printf 'cgraf78/termnav\ncgraf78/present\ncgraf78/missing\ncgraf78/missing')" \
   "$(cat "$shdeps_log")"

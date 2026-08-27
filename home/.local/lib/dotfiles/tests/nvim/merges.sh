@@ -30,13 +30,16 @@ nvim_test_merges() {
   mkdir -p "$nvim_home/.config/nvim" "$nvim_bin" \
     "$nvim_data/nvim/lazy/lazy.nvim"
   : >"$nvim_home/.config/nvim/init.lua"
-  cat >"$nvim_bin/nvim" <<'NVIM'
-#!/bin/sh
+  {
+    printf '#!%s\n' "${BASH:-$(command -v bash)}"
+    cat <<'NVIM'
 [ -z "${DOT_TEST_NVIM_LOCK:-}" ] || [ -d "$DOT_TEST_NVIM_LOCK" ] || exit 88
 printf '%s\n' "$*" >>"$DOT_TEST_NVIM_LOG"
 NVIM
-  cat >"$nvim_bin/pgrep" <<'PGREP'
-#!/bin/sh
+  } >"$nvim_bin/nvim"
+  {
+    printf '#!%s\n' "${BASH:-$(command -v bash)}"
+    cat <<'PGREP'
 if [ -n "${DOT_TEST_PGREP_SEQUENCE:-}" ]; then
   step=0
   [ ! -r "$DOT_TEST_PGREP_STATE" ] || step=$(cat "$DOT_TEST_PGREP_STATE")
@@ -51,6 +54,7 @@ if [ -n "${DOT_TEST_PGREP_SEQUENCE:-}" ]; then
 fi
 exit "${DOT_TEST_PGREP_STATUS:-1}"
 PGREP
+  } >"$nvim_bin/pgrep"
   chmod +x "$nvim_bin/nvim" "$nvim_bin/pgrep"
 
   # shellcheck disable=SC2329 # Called below with isolated environment values.

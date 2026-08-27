@@ -22,6 +22,7 @@ _test_use_host_shdeps
 # production launcher about dot test's alternate HOME.
 _test_managed_nvim_bin || exit 1
 NVIM_TEST_BIN=$REPLY
+_require_nvim_version "nvim-test" "$NVIM_TEST_BIN"
 
 # Resolve dependencies against the configuration under test, not the host's
 # previously installed copy. This matters whenever a dotfiles branch introduces
