@@ -307,7 +307,12 @@ fi
 synthetic_overlay=$tmp/synthetic-overlay
 synthetic_home=$tmp/synthetic-home
 synthetic_suite=$synthetic_overlay/home/.local/lib/dotfiles/tests/synthetic-test
+fixture_umask=$(umask)
+umask 000
 mkdir -p "${synthetic_suite%/*}" "$synthetic_home/.local/bin" "$synthetic_home/.local/lib/dotfiles"
+# Shared CI deliberately exercises permissive umasks on some platforms.
+# Dot must still see the generated executable suite as owner-only.
+chmod 700 "${synthetic_suite%/*}"
 chmod 700 "$synthetic_home/.local/lib/dotfiles"
 mkdir -p "$synthetic_home/.config/dot/extensions"
 chmod 700 "$synthetic_home/.config/dot/extensions"
@@ -316,7 +321,8 @@ cat >"$synthetic_suite" <<'EOF'
 set -euo pipefail
 "${DOT_TEST_REPORTER:?}" complete 1 0
 EOF
-chmod +x "$synthetic_suite"
+chmod 700 "$synthetic_suite"
+umask "$fixture_umask"
 capability_fixture_create "$synthetic_home" "$synthetic_overlay"
 ln -s "$dot_checkout/bin/dot" "$synthetic_home/.local/bin/dot"
 export HOME=$synthetic_home

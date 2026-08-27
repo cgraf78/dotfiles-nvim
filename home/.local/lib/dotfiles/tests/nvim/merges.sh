@@ -5,6 +5,10 @@ nvim_test_merges() {
   local nvim_home nvim_bin nvim_log nvim_state nvim_data nvim_lock
   local nvim_pgrep_state nvim_strict_status nvim_strict_pid
   local nvim_live_pid nvim_live_start public_api_log api_home
+  # Most cases exercise the portable update path even when the suite itself is
+  # running on Termux; the dedicated Android case sets PREFIX explicitly.
+  # shellcheck disable=SC2034 # Read dynamically by Dot's platform matcher.
+  local PREFIX=
 
   public_api_log=$(_tmpdir)/public-hook-api.log
   api_home=$(_tmpdir)/api-home
