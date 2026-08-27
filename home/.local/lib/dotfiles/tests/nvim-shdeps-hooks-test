@@ -12,6 +12,21 @@ _assert_not_contains "neovim: shdeps install supports Android" \
   "os:!android" "$neovim_dep"
 _assert_not_contains "neovim: macOS package entry does not trust the public launcher" \
   "neovim pkg nvim" "$(tr -s '[:space:]' ' ' <"$HOME/.config/shdeps/20-nvim.conf")"
+tree_sitter_dep=$(awk '$1 == "tree-sitter-cli" { print; exit }' \
+  "$HOME/.config/shdeps/20-nvim.conf")
+_assert_contains "tree-sitter: editor capability selects the parser CLI" \
+  "pkg tree-sitter" "$tree_sitter_dep"
+for package_mapping in \
+  android:tree-sitter \
+  brew:tree-sitter \
+  apt:tree-sitter-cli \
+  dnf:tree-sitter-cli \
+  pacman:tree-sitter-cli \
+  zypper:tree-sitter-cli \
+  apk:tree-sitter-cli; do
+  _assert_contains "tree-sitter: preserves package mapping $package_mapping" \
+    "$package_mapping" "$tree_sitter_dep"
+done
 
 # shellcheck disable=SC1091
 . "$HOME/.config/shdeps/hooks.d/neovim/neovim.sh"
