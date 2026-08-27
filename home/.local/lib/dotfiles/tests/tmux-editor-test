@@ -2,6 +2,7 @@
 set -u
 . "${BASH_SOURCE[0]%/*}/nvim/helpers.sh"
 fragment=$HOME/.config/tmux/conf.d/20-editor.conf
+fragment_content=$(<"$fragment")
 socket=dotfiles-nvim-test-$$
 if ! tmux -L "$socket" -f /dev/null new-session -d 2>/dev/null ||
   ! tmux -L "$socket" source-file "$fragment" 2>/dev/null; then
@@ -28,6 +29,12 @@ _assert_contains 'tmux editor runtime forwards Ctrl-Tab to an editor pane' \
   "send-keys Escape '[9;5u'" "$ctrl_tab"
 _assert_contains 'tmux editor runtime forwards Ctrl-Shift-Tab to an editor pane' \
   "send-keys Escape '[9;6u'" "$ctrl_shift_tab"
+_assert_contains 'tmux editor runtime routes the next tab boundary through Termnav' \
+  'termnav-relay navigate tab-select next' "$fragment_content"
+_assert_contains 'tmux editor runtime routes the previous tab boundary through Termnav' \
+  'termnav-relay navigate tab-select previous' "$fragment_content"
+_assert_not_contains 'tmux editor runtime retires the old navigation command' \
+  'termnav-navigate' "$fragment_content"
 route_lines=("$pane_left" "$pane_down" "$pane_up" "$pane_right")
 route_directions=(left down up right)
 route_native=('select-pane -L' 'select-pane -D' 'select-pane -U' 'select-pane -R')
@@ -38,7 +45,9 @@ for route_index in "${!route_lines[@]}"; do
   _assert_contains "tmux editor runtime keeps $direction selection native" \
     "$native" "$line"
   _assert_contains "tmux editor runtime routes the $direction boundary through Termnav" \
-    "termnav-navigate pane-select $direction --parent" "$line"
+    "termnav-relay navigate pane-select $direction --parent" "$line"
+  _assert_not_contains "tmux editor runtime retires the old $direction router" \
+    'termnav-navigate' "$line"
   _assert_contains "tmux editor runtime preserves the source pane for $direction routing" \
     '--source-pane #{pane_id}' "$line"
 done
