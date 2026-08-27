@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 
 nvim_test_merges() {
-  local source_home=${DOT_TEST_SOURCE_HOME:-$HOME}
+  local active_home owner_root source_home
   local nvim_home nvim_bin nvim_log nvim_state nvim_data nvim_lock
   local nvim_pgrep_state nvim_strict_status nvim_strict_pid
   local nvim_live_pid nvim_live_start public_api_log api_home
@@ -10,16 +10,20 @@ nvim_test_merges() {
   # shellcheck disable=SC2034 # Read dynamically by Dot's platform matcher.
   local PREFIX=
 
+  owner_root=$(_nvim_repo_root)
+  source_home=$owner_root/home
+  active_home=${DOT_TEST_SOURCE_HOME:-$HOME}
+
   public_api_log=$(_tmpdir)/public-hook-api.log
   api_home=$(_tmpdir)/api-home
   mkdir -p "$api_home/.local/lib/dotfiles/merge-hooks.d/lib"
   cp "$source_home/.local/lib/dotfiles/merge-hooks.d/nvim.sh" \
     "$api_home/.local/lib/dotfiles/merge-hooks.d/nvim.sh"
-  cp "$source_home/.local/lib/dotfiles/merge-hooks.d/lib/compat.sh" \
+  cp "$active_home/.local/lib/dotfiles/merge-hooks.d/lib/compat.sh" \
     "$api_home/.local/lib/dotfiles/merge-hooks.d/lib/compat.sh"
   for support in windows.sh agent-playbooks.sh shdeps-assets.sh; do
-    if [[ -f $source_home/.local/lib/dotfiles/merge-hooks.d/lib/$support ]]; then
-      cp "$source_home/.local/lib/dotfiles/merge-hooks.d/lib/$support" \
+    if [[ -f $active_home/.local/lib/dotfiles/merge-hooks.d/lib/$support ]]; then
+      cp "$active_home/.local/lib/dotfiles/merge-hooks.d/lib/$support" \
         "$api_home/.local/lib/dotfiles/merge-hooks.d/lib/$support"
     fi
   done
@@ -222,10 +226,8 @@ OWNER
 
   _assert_contains "nvim merge: loads support through public hook API" \
     $'source\tmerge-hooks.d/lib/compat.sh' "$(cat "$public_api_log")"
-  if [[ ${DOT_PROFILE_FIXTURE:-0} != 1 ]]; then
-    _assert_contains "nvim merge: checks tool presence through public hook API" \
-      $'tool\tnvim' "$(cat "$public_api_log")"
-  fi
+  _assert_contains "nvim merge: checks tool presence through public hook API" \
+    $'tool\tnvim' "$(cat "$public_api_log")"
   _assert_contains "nvim merge: checks Android through public hook API" \
     $'platform\tandroid' "$(cat "$public_api_log")"
   _assert_contains "nvim merge: reports updates through public hook API" \

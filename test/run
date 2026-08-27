@@ -215,6 +215,18 @@ linked_relative=${linked_source#"$repo_root/home"/}
   echo 'capability descriptor was not converged through standalone Dot' >&2
   exit 1
 }
+# The single-quoted script intentionally expands $1 in the child shell.
+# shellcheck disable=SC2016
+installed_nvim_root=$(
+  env -u DOT_PROFILE_FIXTURE \
+    DOT_TEST_TESTS_DIR="$HOME/.local/lib/dotfiles/tests" \
+    bash -c '. "$1"; _nvim_repo_root' _ \
+    "$HOME/.local/lib/dotfiles/tests/nvim/helpers.sh"
+)
+[[ $installed_nvim_root == "$repo_root" ]] || {
+  echo "installed Nvim helper resolved the wrong owner root: $installed_nvim_root" >&2
+  exit 1
+}
 
 # This owner-specific CI smoke retains the historical non-`*-test` name, so it
 # runs explicitly rather than entering Dot's component-suite namespace.

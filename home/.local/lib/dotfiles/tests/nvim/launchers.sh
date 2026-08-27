@@ -8,7 +8,6 @@ nvim_test_launchers() {
 
   _nvim_launcher_test_shdeps() {
     local home=$1
-    [[ ${DOT_PROFILE_FIXTURE:-0} == 1 ]] || return 0
     mkdir -p "$home/.local/bin"
     cat >"$home/.local/bin/shdeps" <<'SHDEPS'
 #!/usr/bin/env bash
@@ -30,9 +29,7 @@ SHDEPS
   nvim_launcher_provider="$nvim_launcher_home/termnav-nvim-launcher.sh"
   mkdir -p "$nvim_launcher_home/.local/share/neovim/neovim/bin" "$nvim_launcher_cwd"
   _nvim_launcher_test_shdeps "$nvim_launcher_home"
-  if [[ ${DOT_PROFILE_FIXTURE:-0} == 1 ]]; then
-    nvim_launcher_path=$nvim_launcher_home/.local/bin:$PATH
-  fi
+  nvim_launcher_path=$nvim_launcher_home/.local/bin:$PATH
 
   cat >"$nvim_launcher_home/.local/share/neovim/neovim/bin/nvim" <<'MOCK'
 #!/usr/bin/env bash
@@ -58,9 +55,7 @@ MOCK
 
   nvim_reuse_home=$(_tmpdir)
   _nvim_launcher_test_shdeps "$nvim_reuse_home"
-  if [[ ${DOT_PROFILE_FIXTURE:-0} == 1 ]]; then
-    nvim_reuse_path=$nvim_reuse_home/.local/bin:$PATH
-  fi
+  nvim_reuse_path=$nvim_reuse_home/.local/bin:$PATH
   result=$(
     cd "$nvim_launcher_cwd" || exit
     HOME="$nvim_reuse_home" PATH="$nvim_reuse_path" \

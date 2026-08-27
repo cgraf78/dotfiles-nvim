@@ -110,8 +110,35 @@ nvim_test_finish() { _test_summary; }
 # the exact spelling returned by macOS or libuv. In particular, temporary paths
 # under /var may be reported as /private/var by some tools.
 _test_realpath() {
-  local path="$1"
-  realpath "$path" 2>/dev/null || printf '%s\n' "$path"
+  local path="$1" target directory basename canonical_directory
+
+  if [[ -L $path ]]; then
+    target=$(readlink "$path") || return 1
+    case $target in
+      /*) path=$target ;;
+      *) path=${path%/*}/$target ;;
+    esac
+  fi
+
+  if command -v realpath >/dev/null 2>&1; then
+    realpath "$path" 2>/dev/null && return
+  fi
+  if [[ -d $path ]]; then
+    (cd -P -- "$path" 2>/dev/null && pwd -P) && return
+  fi
+
+  directory=${path%/*}
+  basename=${path##*/}
+  [[ $directory != "$path" ]] || directory=.
+  canonical_directory=$(cd -P -- "$directory" 2>/dev/null && pwd -P) || {
+    printf '%s\n' "$path"
+    return
+  }
+  if [[ $canonical_directory == / ]]; then
+    printf '/%s\n' "$basename"
+  else
+    printf '%s/%s\n' "$canonical_directory" "$basename"
+  fi
 }
 
 # Suites that start real editor/tool processes from a worktree HOME can reuse
@@ -182,6 +209,32 @@ _test_dot_root() {
     return
   done
   return 1
+}
+
+_nvim_repo_root() {
+  local tests_dir=${DOT_TEST_TESTS_DIR:-} helper_source candidate helper_dir
+
+  helper_source=$(_test_realpath "${BASH_SOURCE[0]}")
+  case $helper_source in
+    */home/.local/lib/dotfiles/tests/nvim/helpers.sh)
+      candidate=${helper_source%/home/.local/lib/dotfiles/tests/nvim/helpers.sh}
+      if [[ -f $candidate/.github/dotfiles-source.lock &&
+        -d $candidate/home ]]; then
+        printf '%s\n' "$candidate"
+        return 0
+      fi
+      ;;
+  esac
+
+  case $tests_dir in
+    */home/.local/lib/dotfiles/tests)
+      printf '%s\n' "${tests_dir%/home/.local/lib/dotfiles/tests}"
+      return 0
+      ;;
+  esac
+
+  helper_dir=$(cd "${BASH_SOURCE[0]%/*}" && pwd -P)
+  (cd "$helper_dir/../../../../../.." && pwd -P)
 }
 
 # Load the public merge-extension API for tests that exercise client policy

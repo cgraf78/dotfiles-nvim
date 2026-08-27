@@ -207,8 +207,7 @@ eval "$saved_run_nvim_startup"
 _assert_eq "startup preparation: does not retry a child status 124" "124" "$startup_rc"
 _assert_file_content "startup preparation: child status 124 runs once" "120" \
   "$startup_mock_log"
-if [[ ${DOT_PROFILE_FIXTURE:-0} == 1 &&
-  ${DOT_PROFILE_FIXTURE_PROFILE:-} == dev ]]; then
+if [[ -e $HOME/.config/nvim/lua/plugins/zz-dev-extras.lua ]]; then
   _pass "editor-only startup smoke is covered by the editor fixture"
 else
   _assert_nvim_startup_budget "startup: .bashrc opens and exits within budget" "$HOME/.bashrc"
