@@ -1,0 +1,166 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root=$(cd "${BASH_SOURCE[0]%/*}/.." && pwd -P)
+cd "$repo_root"
+repo_name=${repo_root##*/}
+
+fail() {
+  printf 'workflow-test: %s\n' "$*" >&2
+  exit 1
+}
+
+validate_actions_refs() {
+  local workflows_dir=$1 expected=$2 ref found=0
+  while IFS= read -r ref; do
+    found=$((found + 1))
+    [[ $ref == *@* && ${ref##*@} == "$expected" ]] || return 1
+  done < <(grep -rho 'cgraf78/actions/[^[:space:]#]*' "$workflows_dir" | LC_ALL=C sort -u)
+  ((found > 0))
+}
+
+case $repo_name in
+  dotfiles-nvim)
+    expected_cron='23 9 * * *'
+    descriptor=20-nvim.conf
+    ;;
+  dotfiles-dev)
+    expected_cron='37 9 * * *'
+    descriptor=30-dev.conf
+    ;;
+  *) fail "unexpected repository name: $repo_name" ;;
+esac
+
+remote_predicate() {
+  local remote_tmp
+  command -v gh >/dev/null || fail 'gh is required for remote validation'
+  [[ $(gh api "repos/cgraf78/$repo_name" --jq .visibility) == public ]] || fail 'remote repository is not public'
+  [[ $(gh api "repos/cgraf78/$repo_name" --jq .default_branch) == main ]] || fail 'remote default branch is not main'
+  [[ $(gh api "repos/cgraf78/$repo_name/license" --jq .license.spdx_id) == MIT ]] || fail 'remote license is not MIT'
+  remote_tmp=$(mktemp -d)
+  trap 'rm -rf -- "$remote_tmp"' RETURN
+  gh api --method GET repos/cgraf78/dotfiles/contents/.github/LICENSE \
+    -f ref=703e1aeea7286fccec56f65fa4314b8d57b46469 --jq .content |
+    base64 --decode >"$remote_tmp/source-LICENSE"
+  gh api --method GET "repos/cgraf78/$repo_name/contents/LICENSE" --jq .content |
+    base64 --decode >"$remote_tmp/target-LICENSE"
+  cmp LICENSE "$remote_tmp/source-LICENSE" || fail 'local license differs from immutable source'
+  cmp "$remote_tmp/target-LICENSE" "$remote_tmp/source-LICENSE" || fail 'remote license bytes differ from immutable source'
+}
+
+if [[ ${1:-} == --remote-predicate ]]; then
+  remote_predicate
+  exit 0
+fi
+
+if [[ -n ${WORKFLOW_TEST_COUNT_FILE:-} ]]; then
+  count=0
+  [[ ! -f $WORKFLOW_TEST_COUNT_FILE ]] || count=$(<"$WORKFLOW_TEST_COUNT_FILE")
+  printf '%s\n' "$((count + 1))" >"$WORKFLOW_TEST_COUNT_FILE"
+fi
+
+required_files=(
+  .github/cgraf78-actions.lock .github/dependabot.yml .github/dot.lock
+  .github/dot-test-suites.txt .github/dotfiles-source.lock
+  .github/repository-settings-endpoints.txt .github/shellcheck-files.txt
+  .github/workflows/retry-infrastructure.yml .github/workflows/test.yml
+  .gitignore LICENSE README.md home/.gitkeep test/run test/workflow-test
+  test/lib/capability-fixture.sh test/lib/repository-settings.sh
+  test/lib/wait-github-state.sh
+)
+for path in "${required_files[@]}"; do [[ -f $path ]] || fail "missing required file: $path"; done
+
+single_sha() {
+  local file=$1 expected=$2 value
+  [[ $(wc -l <"$file" | tr -d '[:space:]') == 1 ]] || fail "$file must contain exactly one line"
+  value=$(<"$file")
+  [[ $value =~ ^[0-9a-f]{40}$ ]] || fail "$file does not contain a full lowercase commit SHA"
+  [[ $value == "$expected" ]] || fail "$file contains an unexpected commit SHA"
+}
+single_sha .github/cgraf78-actions.lock de3f6086e36a77eec8ee62f2c9871266e4b5c05c
+single_sha .github/dot.lock dfe976f4962389ee2c2bfe107a8bcfc34660469d
+
+expected_source=$'version=1\nrepository=cgraf78/dotfiles\ncommit=703e1aeea7286fccec56f65fa4314b8d57b46469\nlicense_path=.github/LICENSE'
+[[ $(<.github/dotfiles-source.lock) == "$expected_source" ]] || fail 'source lock is not canonical'
+if LC_ALL=C grep -q $'\r' .github/dotfiles-source.lock; then fail 'source lock contains CRLF'; fi
+
+if command -v sha256sum >/dev/null 2>&1; then
+  license_hash=$(sha256sum LICENSE | awk '{print $1}')
+else
+  license_hash=$(shasum -a 256 LICENSE | awk '{print $1}')
+fi
+[[ $license_hash == bfaed6d8fb29d7208c1266afa313681591d6ca05ec2f7e005cebe3d7a7b43579 ]] || fail 'LICENSE bytes differ from the frozen MIT license'
+[[ $(wc -c <LICENSE | tr -d '[:space:]') == 1067 ]] || fail 'LICENSE size differs from the frozen MIT license'
+if [[ -n ${DOTFILES_SOURCE_REPO:-} ]]; then
+  git -C "$DOTFILES_SOURCE_REPO" cat-file -e '703e1aeea7286fccec56f65fa4314b8d57b46469^{commit}'
+  cmp LICENSE <(git -C "$DOTFILES_SOURCE_REPO" show 703e1aeea7286fccec56f65fa4314b8d57b46469:.github/LICENSE)
+  cmp .github/dependabot.yml <(git -C "$DOTFILES_SOURCE_REPO" show 703e1aeea7286fccec56f65fa4314b8d57b46469:.github/dependabot.yml)
+  cmp .github/workflows/retry-infrastructure.yml <(git -C "$DOTFILES_SOURCE_REPO" show 703e1aeea7286fccec56f65fa4314b8d57b46469:.github/workflows/retry-infrastructure.yml)
+fi
+[[ $(<.gitignore) == '.worktrees/' ]] || fail '.gitignore must contain only .worktrees/'
+manifest_hash=$(sha256sum .github/repository-settings-endpoints.txt 2>/dev/null | awk '{print $1}' || shasum -a 256 .github/repository-settings-endpoints.txt | awk '{print $1}')
+[[ $manifest_hash == 33b811658ba29f30dcebc77f1a10b4d37bac199c358831e1fa89af2bd8f18ac4 ]] || fail 'repository settings endpoint contract drifted'
+
+workflow=.github/workflows/test.yml
+grep -Fx 'name: Tests' "$workflow" >/dev/null || fail 'test workflow name drifted'
+grep -Fx "    - cron: \"$expected_cron\"" "$workflow" >/dev/null || fail 'nightly schedule drifted'
+grep -Fx '      setup: none' "$workflow" >/dev/null || fail 'capability CI must use setup: none'
+grep -Fx '      matrix-set: full' "$workflow" >/dev/null || fail 'capability CI must use the full matrix'
+grep -Fx '      profiles: base,jq,python' "$workflow" >/dev/null || fail 'bootstrap prerequisite profile drifted'
+grep -Fx '    name: cgraf78/actions sync' "$workflow" >/dev/null || fail 'actions-sync job is missing'
+grep -Fx '          persist-credentials: false' "$workflow" >/dev/null || fail 'checkout credentials must not persist'
+if grep -F 'setup: dotfiles' "$workflow" >/dev/null; then fail 'overlay CI must not bootstrap the base dotfiles repository'; fi
+
+actions_sha=$(<.github/cgraf78-actions.lock)
+validate_actions_refs .github/workflows "$actions_sha" || fail 'a cgraf78/actions ref is missing or differs from the lock'
+refs_tmp=$(mktemp -d)
+trap 'rm -rf -- "$refs_tmp"' EXIT HUP INT TERM
+printf 'uses: cgraf78/actions/.github/actions/example@main\n' >"$refs_tmp/bad.yml"
+if validate_actions_refs "$refs_tmp" "$actions_sha"; then fail 'moving cgraf78/actions ref was accepted'; fi
+rm -rf -- "$refs_tmp"
+trap - EXIT HUP INT TERM
+grep -F "shell-ci.yml@$actions_sha" "$workflow" >/dev/null || fail 'shared shell workflow ref is missing'
+grep -F "verify-consumer-sync@$actions_sha" "$workflow" >/dev/null || fail 'actions sync ref is missing'
+grep -Fx '        run: test/workflow-test --remote' "$workflow" >/dev/null || fail 'remote license check is missing'
+grep -F 'wait_github_state 120 3' test/workflow-test >/dev/null || fail 'remote checks must use bounded polling'
+grep -F "infra-retry@$actions_sha" .github/workflows/retry-infrastructure.yml >/dev/null || fail 'retry action ref is missing'
+grep -F 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' "$workflow" >/dev/null || fail 'checkout pin drifted'
+
+expected_shell_files=(test/run test/workflow-test test/lib/capability-fixture.sh test/lib/repository-settings.sh test/lib/wait-github-state.sh)
+declare -a actual_shell_files=()
+while IFS=$'\t' read -r type path extra; do
+  case $type in '' | \#*) continue ;; esac
+  [[ $type == program && -n $path && -z ${extra:-} ]] || fail 'invalid typed ShellCheck inventory record'
+  [[ -f $path ]] || fail "ShellCheck inventory path is missing: $path"
+  actual_shell_files+=("$path")
+done <.github/shellcheck-files.txt
+mapfile -t expected_shell_files < <(printf '%s\n' "${expected_shell_files[@]}" | LC_ALL=C sort)
+mapfile -t actual_shell_files < <(printf '%s\n' "${actual_shell_files[@]}" | LC_ALL=C sort)
+[[ ${actual_shell_files[*]} == "${expected_shell_files[*]}" ]] || fail 'typed ShellCheck inventory is incomplete or contains extras'
+
+test/lib/repository-settings.sh validate
+test/lib/repository-settings.sh --self-test
+test/lib/wait-github-state.sh --self-test
+test/lib/capability-fixture.sh --self-test
+test/run --inventory-self-test
+
+descriptor_path=".config/dot/overlays.d/$descriptor"
+case $descriptor_path in
+  .config/dot/overlays.d/20-nvim.conf | .config/dot/overlays.d/30-dev.conf) ;;
+  *) fail 'unexpected capability descriptor path' ;;
+esac
+
+suite_count=$(awk 'NF && $1 !~ /^#/ { count++ } END { print count+0 }' .github/dot-test-suites.txt)
+case ${DOTFILES_CAPABILITY_PHASE:-bootstrap} in
+  bootstrap) ;;
+  final) ((suite_count > 0)) || fail 'final mode requires a non-empty suite inventory' ;;
+  *) fail 'DOTFILES_CAPABILITY_PHASE must be bootstrap or final' ;;
+esac
+
+if [[ ${1:-} == --remote ]]; then
+  # shellcheck source=test/lib/wait-github-state.sh
+  . "$repo_root/test/lib/wait-github-state.sh"
+  wait_github_state 120 3 "$repo_root/test/workflow-test" --remote-predicate
+fi
+
+printf 'workflow-test: bootstrap contract is complete\n'

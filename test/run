@@ -1,0 +1,188 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root=$(cd "${BASH_SOURCE[0]%/*}/.." && pwd -P)
+cd "$repo_root"
+
+validate_suite_inventory() {
+  local root=$1 inventory=$2 source_root=$3 entry suite relative_suite suite_name
+  while IFS= read -r entry || [[ -n $entry ]]; do
+    case $entry in '' | \#*) continue ;; esac
+    [[ $entry =~ ^home/\.local/lib/dotfiles/tests/[a-z0-9][a-z0-9-]*-test$ ]] || {
+      echo "invalid suite inventory entry: $entry" >&2
+      return 1
+    }
+    [[ -f $source_root/$entry && -x $source_root/$entry ]] || {
+      echo "missing executable suite: $entry" >&2
+      return 1
+    }
+    suite_name=${entry##*/}
+    printf '%s\n' "${suite_name%-test}"
+  done <"$inventory"
+  [[ ! -d $root ]] || while IFS= read -r suite; do
+    relative_suite=${suite#"$source_root"/}
+    grep -Fx "$relative_suite" "$inventory" >/dev/null || {
+      echo "unlisted executable suite: $relative_suite" >&2
+      return 1
+    }
+  done < <(find "$root" -type f -name '*-test' -perm -u+x -print | LC_ALL=C sort)
+}
+
+inventory_self_test() {
+  local tmp root inventory output
+  tmp=$(mktemp -d)
+  trap 'rm -rf -- "$tmp"' RETURN
+  root=$tmp/repo/home/.local/lib/dotfiles/tests
+  inventory=$tmp/repo/inventory
+  mkdir -p "$root"
+  printf '#!/usr/bin/env bash\nexit 0\n' >"$root/declared-test"
+  printf '#!/usr/bin/env bash\nexit 0\n' >"$root/unlisted-test"
+  chmod +x "$root/declared-test" "$root/unlisted-test"
+  printf 'home/.local/lib/dotfiles/tests/declared-test\n' >"$inventory"
+  if validate_suite_inventory "$root" "$inventory" "$tmp/repo" >/dev/null 2>&1; then
+    echo 'suite inventory accepted an unlisted executable' >&2
+    return 1
+  fi
+  rm "$root/unlisted-test"
+  output=$(validate_suite_inventory "$root" "$inventory" "$tmp/repo")
+  [[ $output == declared ]]
+}
+
+if [[ ${1:-} == --inventory-self-test ]]; then
+  inventory_self_test
+  exit 0
+fi
+
+tmp=$(mktemp -d)
+trap 'rm -rf -- "$tmp"' EXIT HUP INT TERM
+
+export WORKFLOW_TEST_COUNT_FILE=$tmp/workflow-count
+test/workflow-test
+[[ $(<"$WORKFLOW_TEST_COUNT_FILE") == 1 ]] || {
+  echo 'test/run did not execute workflow-test exactly once' >&2
+  exit 1
+}
+unset WORKFLOW_TEST_COUNT_FILE
+
+# shellcheck source=test/lib/capability-fixture.sh
+. "$repo_root/test/lib/capability-fixture.sh"
+fixture_home=$tmp/home
+capability_fixture_create "$fixture_home" "$repo_root"
+[[ ! -e $fixture_home/.git && ! -e $fixture_home/.dotfiles ]]
+grep -Fx "path=$repo_root" "$fixture_home/.config/dot/overlays.d/20-nvim.conf" >/dev/null
+
+dot_sha=$(<.github/dot.lock)
+dot_checkout=$tmp/xdg-data/cgraf78/dot
+mkdir -p "${dot_checkout%/*}" "$fixture_home/.local/bin"
+git init --quiet "$dot_checkout"
+git -C "$dot_checkout" remote add origin "${DOT_REPOSITORY:-https://github.com/cgraf78/dot.git}"
+git -C "$dot_checkout" fetch --quiet --depth=1 origin "$dot_sha"
+git -C "$dot_checkout" checkout --quiet --detach FETCH_HEAD
+[[ $(git -C "$dot_checkout" rev-parse HEAD) == "$dot_sha" ]]
+ln -s "$dot_checkout/bin/dot" "$fixture_home/.local/bin/dot"
+
+# Keep user-local host tools out of capability tests. Resolve only commands
+# supplied by audited system/prerequisite roots into a private fixture bin.
+controlled_bin=$tmp/bin
+mkdir "$controlled_bin"
+system_roots=()
+[[ -z ${PREFIX:-} ]] || system_roots+=("$PREFIX/bin")
+system_roots+=(/opt/homebrew/bin /usr/local/bin /usr/bin /bin)
+required_commands=(awk bash basename cat chmod cmp cut date dirname env find git grep head id jq ln mkdir mkfifo mktemp mv od ps pwd python3 readlink rm rmdir sed sh sleep sort stat tail tee tr uname wc xargs)
+for command_name in "${required_commands[@]}"; do
+  command_path=
+  for command_root in "${system_roots[@]}"; do
+    if [[ -x $command_root/$command_name && ! -d $command_root/$command_name ]]; then
+      command_path=$command_root/$command_name
+      break
+    fi
+  done
+  [[ -n $command_path ]] || {
+    echo "missing required fixture command: $command_name" >&2
+    exit 1
+  }
+  ln -s "$command_path" "$controlled_bin/$command_name"
+done
+cat >"$controlled_bin/hostname" <<'EOF'
+#!/bin/sh
+printf 'capability-ci.invalid\n'
+EOF
+cat >"$controlled_bin/getconf" <<'EOF'
+#!/bin/sh
+case ${1:-} in
+  _NPROCESSORS_ONLN) printf '2\n' ;;
+  *) exit 1 ;;
+esac
+EOF
+chmod +x "$controlled_bin/hostname" "$controlled_bin/getconf"
+export HOME=$fixture_home
+export XDG_CONFIG_HOME=$fixture_home/.config
+export XDG_DATA_HOME=$tmp/xdg-data
+export XDG_STATE_HOME=$tmp/xdg-state
+export XDG_CACHE_HOME=$tmp/xdg-cache
+export XDG_RUNTIME_DIR=$tmp/xdg-runtime
+export PATH=$fixture_home/.local/bin:$controlled_bin
+export SSH_CONNECTION=${SSH_CONNECTION:-}
+unset MALLOC_CONF
+unset JEMALLOC_CONF
+mkdir -p "$XDG_STATE_HOME" "$XDG_CACHE_HOME" "$XDG_RUNTIME_DIR"
+mkdir -p "$HOME/.local/lib/dotfiles"
+chmod 700 "$HOME/.local/lib/dotfiles"
+
+if git -C "$HOME" rev-parse --show-toplevel >/dev/null 2>&1; then
+  echo 'capability fixture unexpectedly contains a base Git repository' >&2
+  exit 1
+fi
+dot --version >/dev/null
+dot update >/dev/null
+find "$repo_root/home" -type f -print | LC_ALL=C sort >"$tmp/overlay-payloads"
+linked_source=
+IFS= read -r linked_source <"$tmp/overlay-payloads" || true
+[[ -n $linked_source ]] || {
+  echo 'capability overlay has no payload to converge' >&2
+  exit 1
+}
+linked_relative=${linked_source#"$repo_root/home"/}
+[[ -L $HOME/$linked_relative && $(readlink "$HOME/$linked_relative") == "$linked_source" ]] || {
+  echo 'capability descriptor was not converged through standalone Dot' >&2
+  exit 1
+}
+
+suite_root=$repo_root/home/.local/lib/dotfiles/tests
+validate_suite_inventory "$suite_root" .github/dot-test-suites.txt "$repo_root" >"$tmp/suites"
+mapfile -t suites <"$tmp/suites"
+
+if [[ ${DOTFILES_CAPABILITY_PHASE:-bootstrap} == final && ${#suites[@]} -eq 0 ]]; then
+  echo 'final capability repository requires at least one focused suite' >&2
+  exit 1
+fi
+if ((${#suites[@]} > 0)); then
+  DOT_TEST_TESTS_DIR=$suite_root DOT_TEST_INCLUDE_PROVIDER=0 \
+    dot test -s "${suites[@]}"
+fi
+
+# Prove a listed suite is linked from a sync=none overlay and executed by Dot,
+# independent of the bootstrap repository's intentionally empty inventory.
+synthetic_overlay=$tmp/synthetic-overlay
+synthetic_home=$tmp/synthetic-home
+synthetic_suite=$synthetic_overlay/home/.local/lib/dotfiles/tests/synthetic-test
+mkdir -p "${synthetic_suite%/*}" "$synthetic_home/.local/bin" "$synthetic_home/.local/lib/dotfiles"
+chmod 700 "$synthetic_home/.local/lib/dotfiles"
+cat >"$synthetic_suite" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+"${DOT_TEST_REPORTER:?}" complete 1 0
+EOF
+chmod +x "$synthetic_suite"
+capability_fixture_create "$synthetic_home" "$synthetic_overlay"
+ln -s "$dot_checkout/bin/dot" "$synthetic_home/.local/bin/dot"
+export HOME=$synthetic_home
+export XDG_CONFIG_HOME=$synthetic_home/.config
+export XDG_STATE_HOME=$tmp/synthetic-state
+export XDG_CACHE_HOME=$tmp/synthetic-cache
+export XDG_RUNTIME_DIR=$tmp/synthetic-runtime
+export PATH=$synthetic_home/.local/bin:$controlled_bin
+mkdir -p "$XDG_STATE_HOME" "$XDG_CACHE_HOME" "$XDG_RUNTIME_DIR"
+dot update >/dev/null
+DOT_TEST_TESTS_DIR=${synthetic_suite%/*} DOT_TEST_INCLUDE_PROVIDER=0 \
+  dot test -s synthetic

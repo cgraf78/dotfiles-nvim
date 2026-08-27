@@ -1,0 +1,16 @@
+# version=1
+# family<TAB>get_method<TAB>get_path<TAB>apply_method<TAB>apply_path<TAB>normalizer<TAB>source_absence
+repository	GET	repos/{repo}	PATCH	repos/{repo}	repository	forbidden
+actions_permissions	GET	repos/{repo}/actions/permissions	PUT	repos/{repo}/actions/permissions	exact	forbidden
+actions_workflow	GET	repos/{repo}/actions/permissions/workflow	PUT	repos/{repo}/actions/permissions/workflow	exact	forbidden
+actions_selected	GET	repos/{repo}/actions/permissions/selected-actions	PUT	repos/{repo}/actions/permissions/selected-actions	exact	conflict_when_all
+rulesets	GET_PAGINATE	repos/{repo}/rulesets	SYNC	repos/{repo}/rulesets	rulesets	empty
+main_protection	GET	repos/{repo}/branches/main/protection	PUT	repos/{repo}/branches/main/protection	protection	forbidden
+topics	GET	repos/{repo}/topics	PUT	repos/{repo}/topics	topics	forbidden
+vulnerability_alerts	GET	repos/{repo}/vulnerability-alerts	PUT_OR_DELETE	repos/{repo}/vulnerability-alerts	http_boolean	forbidden
+automated_security_fixes	GET	repos/{repo}/automated-security-fixes	PUT_OR_DELETE	repos/{repo}/automated-security-fixes	exact	forbidden
+private_vulnerability_reporting	GET	repos/{repo}/private-vulnerability-reporting	PUT_OR_DELETE	repos/{repo}/private-vulnerability-reporting	exact	forbidden
+code_security_configuration	GET	repos/{repo}/code-security-configuration	DELETE_IF_ATTACHED	repos/{repo}/code-security-configuration	http_none	no_content
+interaction_limits	GET	repos/{repo}/interaction-limits	PUT_OR_DELETE	repos/{repo}/interaction-limits	exact	empty_object
+pages	GET	repos/{repo}/pages	DELETE_IF_PRESENT	repos/{repo}/pages	http_absent	not_found
+environments	GET	repos/{repo}/environments	DELETE_UNEXPECTED	repos/{repo}/environments/{environment_name}	environments	empty

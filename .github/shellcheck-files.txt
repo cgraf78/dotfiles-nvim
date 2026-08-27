@@ -1,0 +1,6 @@
+# type<TAB>repository-relative path
+program	test/run
+program	test/workflow-test
+program	test/lib/capability-fixture.sh
+program	test/lib/repository-settings.sh
+program	test/lib/wait-github-state.sh
