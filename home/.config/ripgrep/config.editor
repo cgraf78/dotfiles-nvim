@@ -1,0 +1,7 @@
+--smart-case
+--hidden
+--glob=!.git
+--max-columns=200
+--max-columns-preview
+--hostname-bin=nvim-link-host
+--hyperlink-format=file://{host}{path}:{line}:{column}

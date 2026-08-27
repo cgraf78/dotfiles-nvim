@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+set -u
+. "${BASH_SOURCE[0]%/*}/nvim/helpers.sh"
+fragment=$HOME/.config/tmux/conf.d/20-editor.conf
+socket=dotfiles-nvim-test-$$
+if ! tmux -L "$socket" -f /dev/null new-session -d 2>/dev/null ||
+  ! tmux -L "$socket" source-file "$fragment" 2>/dev/null; then
+  nvim_test_fail 'tmux accepts the editor fragment with a minimal inherited configuration'
+  tmux -L "$socket" kill-server >/dev/null 2>&1 || true
+  nvim_test_finish
+fi
+
+root_keys=$(tmux -L "$socket" list-keys -T root | sed -E 's/^bind-key[[:space:]]+-T /bind-key -T /')
+prefix_keys=$(tmux -L "$socket" list-keys -T prefix | sed -E 's/^bind-key[[:space:]]+-T /bind-key -T /')
+ctrl_tab=$(printf '%s\n' "$root_keys" | grep 'bind-key -T root C-Tab ' || true)
+ctrl_shift_tab=$(printf '%s\n' "$root_keys" | grep 'bind-key -T root C-BTab ' || true)
+pane_left=$(printf '%s\n' "$root_keys" | grep 'bind-key -T root C-h ' || true)
+pane_down=$(printf '%s\n' "$root_keys" | grep 'bind-key -T root C-j ' || true)
+pane_up=$(printf '%s\n' "$root_keys" | grep 'bind-key -T root C-k ' || true)
+pane_right=$(printf '%s\n' "$root_keys" | grep 'bind-key -T root C-l ' || true)
+backslash=$'\\'
+previous_pane=$(printf '%s\n' "$root_keys" |
+  grep -F "bind-key -T root C-${backslash}${backslash} " || true)
+mouse_up=$(printf '%s\n' "$root_keys" | grep 'bind-key -T root C-MouseUp1Pane ' || true)
+open_link=$(printf '%s\n' "$prefix_keys" | grep 'bind-key -T prefix e ' || true)
+
+_assert_contains 'tmux editor runtime forwards Ctrl-Tab to an editor pane' \
+  "send-keys Escape '[9;5u'" "$ctrl_tab"
+_assert_contains 'tmux editor runtime forwards Ctrl-Shift-Tab to an editor pane' \
+  "send-keys Escape '[9;6u'" "$ctrl_shift_tab"
+route_lines=("$pane_left" "$pane_down" "$pane_up" "$pane_right")
+route_directions=(left down up right)
+route_native=('select-pane -L' 'select-pane -D' 'select-pane -U' 'select-pane -R')
+for route_index in "${!route_lines[@]}"; do
+  line=${route_lines[route_index]}
+  direction=${route_directions[route_index]}
+  native=${route_native[route_index]}
+  _assert_contains "tmux editor runtime keeps $direction selection native" \
+    "$native" "$line"
+  _assert_contains "tmux editor runtime routes the $direction boundary through Termnav" \
+    "termnav-navigate pane-select $direction --parent" "$line"
+  _assert_contains "tmux editor runtime preserves the source pane for $direction routing" \
+    '--source-pane #{pane_id}' "$line"
+done
+_assert_contains 'tmux editor runtime forwards Ctrl-backslash inside navigation-aware panes' \
+  "send-keys C-${backslash}${backslash}${backslash}${backslash}" \
+  "$previous_pane"
+_assert_contains 'tmux editor runtime keeps previous-pane selection local' \
+  'select-pane -l' "$previous_pane"
+_assert_contains 'tmux editor runtime passes the complete click record to Termnav' \
+  '#{mouse_hyperlink}\\n#{mouse_word}\\n#{mouse_line}\\n#{mouse_x}\\n#{pane_current_path}\\n#{client_tty}\\n#{pane_id}\\n#{mouse_y}\\n#{pane_top}\\n#{pane_left}' \
+  "$mouse_up"
+_assert_contains 'tmux editor runtime opens prompted links through the Nvim adapter' \
+  'nvim-tmux-open link' "$open_link"
+
+pane_filter=$(printf '%s\n' "$pane_left" |
+  sed -n "s/.*awk -v mouse='#{mouse_any_flag}' '\\(.*\\)'\" \"send-keys C-h\".*/\\1/p")
+_assert_contains 'tmux editor runtime preserves the process fallback after parsing' \
+  'END { exit !found }' "$pane_filter"
+printf 'S+ bash 39056 39056\nS+ tmux: client 39056 39056\n' |
+  awk -v mouse=1 "$pane_filter"
+_assert_exit 'tmux editor process fallback identifies a nested focused tmux' 0 "$?"
+
+tmux -L "$socket" kill-server >/dev/null 2>&1 || true
+nvim_test_finish

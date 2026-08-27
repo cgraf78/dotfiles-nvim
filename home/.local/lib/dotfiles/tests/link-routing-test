@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+set -u
+. "${BASH_SOURCE[0]%/*}/nvim/helpers.sh"
+config=$HOME/.config/ripgrep/config.editor
+fragment=$HOME/.config/tmux/conf.d/20-editor.conf
+fixture=$HOME/.local/lib/dotfiles/tests/fixtures/nvim-link-routes.tsv
+nvim_test_contains 'ripgrep linkification uses the Neovim host adapter' \
+  '--hostname-bin=nvim-link-host' "$config"
+nvim_test_contains 'tmux click routing uses the Neovim opener' \
+  'tmux-follow-click --stdin' "$fragment"
+nvim_test_assert 'link route fixture is present' test -s "$fixture"
+
+route_check=$(_tmpdir)/route-check.py
+cat >"$route_check" <<'PY'
+import pathlib
+import sys
+import urllib.parse
+
+fixture = pathlib.Path(sys.argv[1])
+seen = []
+for raw in fixture.read_text().splitlines():
+    if not raw or raw.startswith("#"):
+        continue
+    name, uri, target, cwd, source, context = raw.split("\t")
+    parsed = urllib.parse.urlsplit(uri)
+    if parsed.scheme in {"nvim-open", "lazygit-edit"}:
+        actual_target = urllib.parse.unquote(parsed.netloc + parsed.path)
+        actual_source = "terminal"
+        actual_context = "-"
+    elif parsed.scheme == "file":
+        actual_target = urllib.parse.unquote(parsed.path)
+        if parsed.netloc in {"", "localhost"}:
+            actual_source = "terminal"
+            actual_context = "-"
+        else:
+            actual_source = "remote"
+            actual_context = parsed.netloc
+    else:
+        raise SystemExit(f"unsupported route scheme in {name}: {parsed.scheme}")
+    if (actual_target, actual_source, actual_context) != (target, source, context):
+        raise SystemExit(f"route mismatch: {name}")
+    if not cwd.startswith("/"):
+        raise SystemExit(f"non-absolute cwd: {name}")
+    seen.append(name)
+print(",".join(seen))
+PY
+route_output=$(python3 "$route_check" "$fixture")
+_assert_eq 'link route fixture executes local, Lazygit, localhost, and remote cases' \
+  'local-nvim,lazygit-space,localhost-file,remote-file' "$route_output"
+
+rg_tmp=$(_tmpdir)
+rg_bin=$(_mock_bin)
+rg_host_log=$rg_tmp/host-called
+mkdir -p "$rg_tmp/src"
+{
+  for _ in {1..11}; do printf 'other\n'; done
+  printf 'needle\n'
+} >"$rg_tmp/src/main.lua"
+cat >"$rg_bin/nvim-link-host" <<'EOF'
+#!/usr/bin/env sh
+: >"$NVIM_LINK_HOST_LOG"
+printf 'route-host.invalid\n'
+EOF
+chmod +x "$rg_bin/nvim-link-host"
+rg_output=$(cd "$rg_tmp" && NVIM_LINK_HOST_LOG="$rg_host_log" \
+  RIPGREP_CONFIG_PATH="$config" PATH="$rg_bin:$PATH" \
+  rg --color=always --with-filename -n needle src/main.lua)
+_assert_file_exists 'ripgrep executes the configured Nvim hostname adapter' "$rg_host_log"
+_assert_contains 'ripgrep emits an Nvim-routable file hyperlink' \
+  'file://route-host.invalid' "$rg_output"
+_assert_contains 'ripgrep hyperlink preserves the matched path and line' \
+  'src/main.lua:12' "$rg_output"
+nvim_test_finish

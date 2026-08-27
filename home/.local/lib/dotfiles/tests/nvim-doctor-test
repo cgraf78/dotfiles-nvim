@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -u
+. "${BASH_SOURCE[0]%/*}/nvim/helpers.sh"
+. "${BASH_SOURCE[0]%/*}/nvim/doctor.sh"
+nvim_test_doctor
+nvim_test_finish

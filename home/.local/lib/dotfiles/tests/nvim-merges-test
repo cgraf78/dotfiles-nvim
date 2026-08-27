@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -u
+. "${BASH_SOURCE[0]%/*}/nvim/helpers.sh"
+. "${BASH_SOURCE[0]%/*}/nvim/load-merge-api.sh"
+. "${BASH_SOURCE[0]%/*}/nvim/merges.sh"
+nvim_test_merges
+nvim_test_finish

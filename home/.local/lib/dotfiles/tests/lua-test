@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+set -u
+. "${BASH_SOURCE[0]%/*}/nvim/helpers.sh"
+
+_test_managed_nvim_bin || exit 1
+nvim_bin=$REPLY
+fixture=$(_tmpdir)/dot-home
+script=$(_tmpdir)/shdeps-consumer-test.lua
+mkdir -p "$fixture/.config/nvim/lua/config" \
+  "$fixture/.local/lib/shdeps/shdeps" \
+  "$fixture/.local/share/cgraf78/termnav/lua/termnav" \
+  "$fixture/assets/dir"
+cp "$HOME/.config/nvim/lua/config/dot-runtime.lua" \
+  "$fixture/.config/nvim/lua/config/dot-runtime.lua"
+printf '%s\n' 'return { marker = "termnav" }' \
+  >"$fixture/.local/share/cgraf78/termnav/lua/termnav/init.lua"
+printf '%s\n' 'asset' >"$fixture/assets/readable file.lua"
+ln -s 'readable file.lua' "$fixture/assets/symlink.lua"
+mkfifo "$fixture/assets/fifo"
+ln -s fifo "$fixture/assets/fifo-symlink"
+
+cat >"$fixture/.local/lib/shdeps/shdeps/bootstrap.lua" <<'LUA'
+local M = {}
+local calls = {}
+
+function M.new(options)
+  options = options or {}
+  return {
+    dep_root = function(name)
+      calls[name] = (calls[name] or 0) + 1
+      local log = assert(io.open(assert(os.getenv("SHDEPS_TEST_LOG")), "a"))
+      log:write(name .. "\n")
+      log:close()
+      if name == "cgraf78/termnav" then
+        return options.home .. "/.local/share/cgraf78/termnav"
+      end
+      if name == "cgraf78/present"
+        or (name == "cgraf78/missing" and calls[name] > 1)
+      then
+        return assert(os.getenv("DOT_TEST_DEP_FILE_ROOT"))
+      end
+      return nil
+    end,
+    env = function()
+      return { HOME = options.home }
+    end,
+  }
+end
+
+return M
+LUA
+
+cat >"$script" <<'LUA'
+local home = assert(os.getenv("TEST_HOME"))
+local runtime = dofile(home .. "/.config/nvim/lua/config/dot-runtime.lua")
+local expected = home .. "/.local/share/cgraf78/termnav/lua/termnav/init.lua"
+assert(runtime.shdeps().env().HOME == home)
+assert(runtime.dep_file("cgraf78/termnav", "lua/termnav/init.lua") == expected)
+assert(runtime.load_dep("cgraf78/termnav", "lua/termnav/init.lua").marker == "termnav")
+
+local readable = runtime.dep_file("cgraf78/present", "assets/readable file.lua")
+local symlink = runtime.dep_file("cgraf78/present", "assets/symlink.lua")
+assert(readable and symlink, "readable assets missing")
+assert(runtime.dep_file("cgraf78/present", "assets/missing.lua") == nil)
+assert(runtime.dep_file("cgraf78/present", "assets/dir") == nil)
+assert(runtime.dep_file("cgraf78/present", "assets/fifo") == nil)
+assert(runtime.dep_file("cgraf78/present", "assets/fifo-symlink") == nil)
+
+assert(runtime.dep_file("cgraf78/missing", "assets/readable file.lua") == nil)
+assert(runtime.dep_file("cgraf78/missing", "assets/readable file.lua") == nil)
+local recovered = nil
+local recovered_in_time = vim.wait(1000, function()
+  recovered = runtime.dep_file("cgraf78/missing", "assets/readable file.lua")
+  return recovered ~= nil
+end, 1)
+assert(recovered_in_time and recovered, "installed root did not recover")
+assert(runtime.dep_file("cgraf78/missing", "assets/readable file.lua"))
+
+local invalid = {
+  "", "/absolute", "C:\\absolute", "\\\\server\\share",
+  "../escape", "nested/../escape", "nested\\..\\escape", "nul\0byte",
+}
+for _, relpath in ipairs(invalid) do
+  assert(runtime.dep_file("cgraf78/present", relpath) == nil, "invalid path resolved")
+end
+assert(runtime.load_dep("cgraf78/present", "assets/missing.lua", { optional = true }) == nil)
+local ok = pcall(runtime.load_dep, "cgraf78/present", "assets/missing.lua")
+assert(not ok, "required missing dependency unexpectedly loaded")
+print("ok")
+LUA
+
+shdeps_log=$(_tmpdir)/shdeps.log
+output=$(DOT_TEST_DEP_FILE_ROOT="$fixture" \
+  SHDEPS_LUA_DIR="$fixture/.local/lib/shdeps" \
+  SHDEPS_TEST_LOG="$shdeps_log" TEST_HOME="$fixture" \
+  "$nvim_bin" --headless --noplugin -u NONE -i NONE -l "$script" 2>&1)
+_assert_eq "dot-runtime resolves, loads, and validates real dependency files through Shdeps" \
+  "ok" "$output"
+_assert_eq "dot-runtime caches present roots and retries an initially absent dependency" \
+  "$(printf 'cgraf78/termnav\ncgraf78/present\ncgraf78/missing\ncgraf78/missing')" \
+  "$(cat "$shdeps_log")"
+nvim_test_finish

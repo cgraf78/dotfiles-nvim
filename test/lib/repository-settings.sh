@@ -42,7 +42,7 @@ validate_manifest() {
     case $get_method in GET | GET_PAGINATE) ;; *) die "unknown get method: $get_method" ;; esac
     case $apply_method in PATCH | PUT | PUT_OR_DELETE | SYNC | DELETE_IF_ATTACHED | DELETE_IF_PRESENT | DELETE_UNEXPECTED) ;; *) die "unknown apply method: $apply_method" ;; esac
     case $normalizer in repository | exact | rulesets | protection | topics | http_boolean | http_none | http_absent | environments) ;; *) die "unknown normalizer: $normalizer" ;; esac
-    case $absence in forbidden | conflict_when_all | empty | no_content | empty_object | not_found) ;; *) die "unknown absence rule: $absence" ;; esac
+    case $absence in forbidden | conflict_when_all | empty | no_content | no_content_or_not_found | empty_object | not_found) ;; *) die "unknown absence rule: $absence" ;; esac
     for path in "$get_path" "$apply_path"; do
       case $path in repos/'{repo}' | repos/'{repo}'/*) ;; *) die "unsafe manifest repository path: $path" ;; esac
       case $path in /* | */ | *//* | */./* | */../* | */. | */.. | *' '*) die "non-normalized manifest path: $path" ;; esac
@@ -64,10 +64,19 @@ render_path() {
   fi
 }
 
+render_repo_path() {
+  local template=$1 repo=$2
+  REPLY=${template//\{repo\}/$repo}
+}
+
+merge_paginated_arrays() {
+  jq -s 'add // []'
+}
+
 status_allowed() {
   local status=$1 absence=$2
   case $absence:$status in
-    forbidden:200 | forbidden:204 | conflict_when_all:409 | empty:200 | no_content:204 | empty_object:200 | not_found:404) return 0 ;;
+    forbidden:200 | forbidden:204 | conflict_when_all:409 | empty:200 | no_content:204 | no_content_or_not_found:204 | no_content_or_not_found:404 | empty_object:200 | not_found:404) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -90,10 +99,10 @@ source_state_allowed() {
     main_protection) [[ $status == 200 ]] && jq -e 'type == "object" and (.required_status_checks | type == "object") and (.enforce_admins.enabled | type == "boolean")' "$body" >/dev/null ;;
     topics) [[ $status == 200 ]] && jq -e '.names | type == "array"' "$body" >/dev/null ;;
     vulnerability_alerts) [[ $status == 204 && ! -s $body ]] ;;
-    automated_security_fixes) [[ $status == 200 ]] && jq -e '(.enabled | type == "boolean") and (.paused | type == "boolean")' "$body" >/dev/null ;;
+    automated_security_fixes) [[ ($status == 204 || $status == 404) && ! -s $body ]] ;;
     private_vulnerability_reporting) [[ $status == 200 ]] && jq -e '.enabled | type == "boolean"' "$body" >/dev/null ;;
     code_security_configuration) [[ $status == 204 && ! -s $body ]] ;;
-    interaction_limits) [[ $status == 200 && $(jq -c . "$body") == '{}' ]] ;;
+    interaction_limits) [[ $status == 204 && ! -s $body ]] ;;
     pages) [[ $status == 404 ]] ;;
     environments) [[ $status == 200 && $(jq '.environments | length' "$body") == 0 ]] ;;
     *) return 1 ;;
@@ -104,13 +113,14 @@ api_read() {
   local method=$1 path=$2 output=$3 rc=0
   local response=$output.response error=$output.error
   if [[ $method == GET_PAGINATE ]]; then
-    gh api --paginate --slurp "$path" >"$output.body" 2>"$error" || rc=$?
+    gh api --paginate "$path" >"$response" 2>"$error" || rc=$?
     [[ $rc -eq 0 ]] || {
       cat "$error" >&2
       return "$rc"
     }
+    merge_paginated_arrays <"$response" >"$output.body"
     printf '200\n' >"$output.status"
-    rm -f "$error"
+    rm -f "$response" "$error"
     return 0
   fi
   gh api --include "$path" >"$response" 2>"$error" || rc=$?
@@ -133,7 +143,7 @@ export_policy() {
   while IFS= read -r line || [[ -n $line ]]; do
     case $line in '' | \#*) continue ;; esac
     IFS=$'\t' read -r family get_method get_path apply_method apply_path normalizer absence <<<"$line"
-    render_path "$get_path" "$repo"
+    render_repo_path "$get_path" "$repo"
     api_read "$get_method" "$REPLY" "$output_dir/$family" || true
     [[ -s $output_dir/$family.status ]] || die "no HTTP status for $family"
     status=$(<"$output_dir/$family.status")
@@ -154,7 +164,7 @@ normalize() {
         printf 'status=%s\n' "$status"
         return
       }
-      jq -S '{visibility,default_branch,has_issues,has_projects,has_wiki,has_pages,has_discussions,is_template,allow_forking,web_commit_signoff_required,allow_merge_commit,allow_squash_merge,allow_rebase_merge,allow_auto_merge,delete_branch_on_merge,allow_update_branch,use_squash_pr_title_as_default,squash_merge_commit_title,squash_merge_commit_message,archived,disabled,security_and_analysis}' "$body"
+      jq -S '{visibility,default_branch,has_issues,has_projects,has_wiki,has_pages,has_discussions,is_template,web_commit_signoff_required,allow_merge_commit,allow_squash_merge,allow_rebase_merge,allow_auto_merge,delete_branch_on_merge,allow_update_branch,use_squash_pr_title_as_default,squash_merge_commit_title,squash_merge_commit_message,archived,disabled,security_and_analysis}' "$body"
       ;;
     protection)
       [[ $status == 200 ]] || {
@@ -199,6 +209,17 @@ api_input() {
   printf '%s\n' "$payload" | gh api --method "$method" "$path" --input - >/dev/null
 }
 
+repository_apply_payload() {
+  local target=$1 body=$2
+  jq -c --arg description "Public ${target#cgraf78/dotfiles-} capability overlay for cgraf78/dotfiles." \
+    '{description:$description,visibility,default_branch,has_issues,has_projects,has_wiki,has_discussions,is_template,web_commit_signoff_required,allow_merge_commit,allow_squash_merge,allow_rebase_merge,allow_auto_merge,delete_branch_on_merge,allow_update_branch,use_squash_pr_title_as_default,squash_merge_commit_title,squash_merge_commit_message,archived,security_and_analysis:(.security_and_analysis | with_entries(select(.key == "secret_scanning" or .key == "secret_scanning_push_protection" or .key == "secret_scanning_non_provider_patterns" or .key == "secret_scanning_validity_checks")))}' "$body"
+}
+
+protection_apply_payload() {
+  local body=$1
+  jq -c '{required_status_checks:(.required_status_checks | if . == null then null else {strict,checks} end),enforce_admins:.enforce_admins.enabled,required_pull_request_reviews:(.required_pull_request_reviews | if . == null then null else {dismiss_stale_reviews,require_code_owner_reviews,required_approving_review_count,require_last_push_approval} end),restrictions:null,required_linear_history:.required_linear_history.enabled,allow_force_pushes:.allow_force_pushes.enabled,allow_deletions:.allow_deletions.enabled,block_creations:.block_creations.enabled,required_conversation_resolution:.required_conversation_resolution.enabled,lock_branch:.lock_branch.enabled,allow_fork_syncing:.allow_fork_syncing.enabled}' "$body"
+}
+
 apply_one() {
   local family=$1 target=$2 source_dir=$3 apply_method=$4 apply_path=$5
   local path status body payload id name
@@ -208,7 +229,7 @@ apply_one() {
   path=$REPLY
   case $family in
     repository)
-      payload=$(jq -c --arg description "Public ${target#cgraf78/dotfiles-} capability overlay for cgraf78/dotfiles." '{description:$description,visibility,default_branch,has_issues,has_projects,has_wiki,has_discussions,is_template,allow_forking,web_commit_signoff_required,allow_merge_commit,allow_squash_merge,allow_rebase_merge,allow_auto_merge,delete_branch_on_merge,allow_update_branch,use_squash_pr_title_as_default,squash_merge_commit_title,squash_merge_commit_message,archived,security_and_analysis:(.security_and_analysis | with_entries(select(.key == "secret_scanning" or .key == "secret_scanning_push_protection" or .key == "secret_scanning_non_provider_patterns" or .key == "secret_scanning_validity_checks")))}' "$body")
+      payload=$(repository_apply_payload "$target" "$body")
       api_input "$apply_method" "$path" "$payload"
       ;;
     actions_permissions | actions_workflow) api_input "$apply_method" "$path" "$(jq -c . "$body")" ;;
@@ -217,17 +238,24 @@ apply_one() {
       ;;
     rulesets)
       [[ $(jq 'flatten | length' "$body") == 0 ]] || die 'non-empty source rulesets require reviewed synchronization support'
-      while IFS= read -r id; do gh api --method DELETE "repos/$target/rulesets/$id" >/dev/null; done < <(gh api --paginate --slurp "repos/$target/rulesets" --jq 'flatten[]?.id')
+      while IFS= read -r id; do gh api --method DELETE "repos/$target/rulesets/$id" >/dev/null; done < <(gh api --paginate "repos/$target/rulesets" | merge_paginated_arrays | jq -r '.[]?.id')
       ;;
     main_protection)
-      payload=$(jq -c '{required_status_checks:(.required_status_checks | if . == null then null else {strict,checks} end),enforce_admins:.enforce_admins.enabled,required_pull_request_reviews:(.required_pull_request_reviews | if . == null then null else {dismissal_restrictions:{},dismiss_stale_reviews,require_code_owner_reviews,required_approving_review_count,require_last_push_approval} end),restrictions:null,required_linear_history:.required_linear_history.enabled,allow_force_pushes:.allow_force_pushes.enabled,allow_deletions:.allow_deletions.enabled,block_creations:.block_creations.enabled,required_conversation_resolution:.required_conversation_resolution.enabled,lock_branch:.lock_branch.enabled,allow_fork_syncing:.allow_fork_syncing.enabled}' "$body")
+      payload=$(protection_apply_payload "$body")
       api_input "$apply_method" "$path" "$payload"
       ;;
     topics) api_input "$apply_method" "$path" "$(jq -c '{names}' "$body")" ;;
     vulnerability_alerts)
       if [[ $status == 204 ]]; then gh api --method PUT "$path" >/dev/null; else gh api --method DELETE "$path" >/dev/null || true; fi
       ;;
-    automated_security_fixes | private_vulnerability_reporting)
+    automated_security_fixes)
+      case $status in
+        204) gh api --method PUT "$path" >/dev/null ;;
+        404) gh api --method DELETE "$path" >/dev/null || true ;;
+        *) die "unexpected source status for $family: $status" ;;
+      esac
+      ;;
+    private_vulnerability_reporting)
       [[ $status == 200 ]] || die "unexpected source status for $family: $status"
       if [[ $(jq -r '.enabled' "$body") == true ]]; then
         gh api --method PUT "$path" >/dev/null
@@ -240,7 +268,7 @@ apply_one() {
       gh api --method DELETE "$path" >/dev/null 2>&1 || true
       ;;
     interaction_limits)
-      [[ $status == 200 && $(jq -c . "$body") == '{}' ]] || die 'source interaction limit is not empty'
+      [[ $status == 204 && ! -s $body ]] || die 'source interaction limit is not empty'
       gh api --method DELETE "$path" >/dev/null 2>&1 || true
       ;;
     pages)
@@ -278,7 +306,7 @@ apply_policy() {
 }
 
 self_test() {
-  local tmp body
+  local tmp body payload page_output gh_log source_dir expected
   validate_manifest
   repo_allowed cgraf78/dotfiles
   target_allowed cgraf78/dotfiles-nvim
@@ -303,6 +331,79 @@ self_test() {
   if source_state_allowed automated_security_fixes 200 forbidden "$body"; then
     die 'preflight accepted a malformed enabled value'
   fi
+  : >"$body"
+  source_state_allowed automated_security_fixes 204 no_content_or_not_found "$body" ||
+    die 'preflight rejected enabled automated security fixes'
+  source_state_allowed automated_security_fixes 404 no_content_or_not_found "$body" ||
+    die 'preflight rejected disabled automated security fixes'
+  if source_state_allowed automated_security_fixes 200 no_content_or_not_found "$body"; then
+    die 'preflight accepted undocumented automated security fixes status'
+  fi
+  source_state_allowed interaction_limits 204 no_content "$body" ||
+    die 'preflight rejected absent interaction limits'
+  if source_state_allowed interaction_limits 200 no_content "$body"; then
+    die 'preflight accepted undocumented interaction limits status'
+  fi
+
+  source_dir=$(mktemp -d)
+  trap 'rm -f -- "$tmp" "$body"; rm -rf -- "$source_dir"' RETURN
+  gh_log=$source_dir/gh-log
+  # shellcheck disable=SC2329 # Called by apply_one in this regression test.
+  gh() { printf '%s\n' "$*" >>"$gh_log"; }
+  : >"$source_dir/automated_security_fixes.body"
+  printf '204\n' >"$source_dir/automated_security_fixes.status"
+  apply_one automated_security_fixes cgraf78/dotfiles-nvim "$source_dir" \
+    PUT_OR_DELETE 'repos/{repo}/automated-security-fixes'
+  printf '404\n' >"$source_dir/automated_security_fixes.status"
+  apply_one automated_security_fixes cgraf78/dotfiles-nvim "$source_dir" \
+    PUT_OR_DELETE 'repos/{repo}/automated-security-fixes'
+  : >"$source_dir/interaction_limits.body"
+  printf '204\n' >"$source_dir/interaction_limits.status"
+  apply_one interaction_limits cgraf78/dotfiles-nvim "$source_dir" \
+    PUT_OR_DELETE 'repos/{repo}/interaction-limits'
+  expected=$(
+    cat <<'EOF'
+api --method PUT repos/cgraf78/dotfiles-nvim/automated-security-fixes
+api --method DELETE repos/cgraf78/dotfiles-nvim/automated-security-fixes
+api --method DELETE repos/cgraf78/dotfiles-nvim/interaction-limits
+EOF
+  )
+  [[ $(<"$gh_log") == "$expected" ]] ||
+    die 'boolean/no-content repository settings used the wrong mutation'
+  unset -f gh
+
+  printf '%s\n' '{"visibility":"public","default_branch":"main","has_issues":true,"has_projects":false,"has_wiki":false,"has_discussions":false,"is_template":false,"allow_forking":true,"web_commit_signoff_required":false,"allow_merge_commit":false,"allow_squash_merge":true,"allow_rebase_merge":true,"allow_auto_merge":false,"delete_branch_on_merge":true,"allow_update_branch":false,"use_squash_pr_title_as_default":false,"squash_merge_commit_title":"PR_TITLE","squash_merge_commit_message":"PR_BODY","archived":false,"security_and_analysis":{}}' >"$body"
+  payload=$(repository_apply_payload cgraf78/dotfiles-nvim "$body")
+  jq -e 'has("allow_forking") | not' <<<"$payload" >/dev/null ||
+    die 'repository payload included the organization-only allow_forking setting'
+
+  printf '%s\n' '{"required_status_checks":{"strict":true,"checks":[]},"enforce_admins":{"enabled":true},"required_pull_request_reviews":{"dismissal_restrictions":{"users":[{"login":"example"}],"teams":[{"slug":"example"}]},"dismiss_stale_reviews":true,"require_code_owner_reviews":false,"required_approving_review_count":1,"require_last_push_approval":true},"required_linear_history":{"enabled":false},"allow_force_pushes":{"enabled":false},"allow_deletions":{"enabled":false},"block_creations":{"enabled":false},"required_conversation_resolution":{"enabled":true},"lock_branch":{"enabled":false},"allow_fork_syncing":{"enabled":false}}' >"$body"
+  payload=$(protection_apply_payload "$body")
+  jq -e '.required_pull_request_reviews | has("dismissal_restrictions") | not' <<<"$payload" >/dev/null ||
+    die 'branch protection payload included user/team dismissal restrictions'
+
+  render_repo_path 'repos/{repo}/environments/{environment_name}' cgraf78/dotfiles-nvim
+  [[ $REPLY == 'repos/cgraf78/dotfiles-nvim/environments/{environment_name}' ]] ||
+    die 'repository path rendering consumed the environment placeholder early'
+
+  printf '%s\n' '[{"id":2}]' '[{"id":1}]' | merge_paginated_arrays >"$tmp.pages"
+  [[ $(jq -c 'sort_by(.id)' "$tmp.pages") == '[{"id":1},{"id":2}]' ]] ||
+    die 'ruleset page arrays were not merged through supported pagination output'
+
+  page_output=$tmp.paginated
+  gh_log=$tmp.gh-log
+  # shellcheck disable=SC2329 # Called by api_read in this regression test.
+  gh() {
+    printf '%s\n' "$*" >"$gh_log"
+    printf '%s\n' '[{"id":2}]' '[{"id":1}]'
+  }
+  api_read GET_PAGINATE repos/cgraf78/dotfiles/rulesets "$page_output"
+  [[ $(<"$page_output.status") == 200 ]] || die 'paginated ruleset read did not record success'
+  [[ $(jq -c 'sort_by(.id)' "$page_output.body") == '[{"id":1},{"id":2}]' ]] ||
+    die 'paginated ruleset API response was not merged'
+  [[ $(<"$gh_log") == 'api --paginate repos/cgraf78/dotfiles/rulesets' ]] ||
+    die 'ruleset read used unsupported gh pagination arguments'
+  unset -f gh
 }
 
 case ${1:-} in

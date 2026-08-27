@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+set -u
+. "${BASH_SOURCE[0]%/*}/nvim/helpers.sh"
+
+echo "=== neovim hook ==="
+
+neovim_dep=$(awk '$1 == "neovim/neovim" { print; exit }' \
+  "$HOME/.config/shdeps/20-nvim.conf")
+_assert_contains "neovim: launcher-owned binary is custom managed" \
+  "custom" "$neovim_dep"
+_assert_not_contains "neovim: shdeps install supports Android" \
+  "os:!android" "$neovim_dep"
+_assert_not_contains "neovim: macOS package entry does not trust the public launcher" \
+  "neovim pkg nvim" "$(tr -s '[:space:]' ' ' <"$HOME/.config/shdeps/20-nvim.conf")"
+
+# shellcheck disable=SC1091
+. "$HOME/.config/shdeps/hooks.d/neovim/neovim.sh"
+
+nvim_home=$(_tmpdir)
+nvim_bin=$(_tmpdir)
+nvim_brew=$(_mock_bin)
+nvim_brew_prefix=$(_tmpdir)
+nvim_calls=$(_tmpdir)/calls.log
+mkdir -p "$nvim_brew_prefix/bin"
+cat >"$nvim_brew_prefix/bin/nvim" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' 'NVIM v0.12.0'
+EOF
+chmod +x "$nvim_brew_prefix/bin/nvim"
+cat >"$nvim_brew/brew" <<'EOF'
+#!/usr/bin/env bash
+case "$*" in
+  "list neovim") exit 0 ;;
+  "--prefix neovim") printf '%s\n' "$NVIM_TEST_BREW_PREFIX" ;;
+  *) exit 1 ;;
+esac
+EOF
+chmod +x "$nvim_brew/brew"
+
+# shellcheck disable=SC2329 # Hook calls this public Shdeps API by name.
+shdeps_install_dir() { echo "$nvim_home"; }
+# shellcheck disable=SC2329 # Hook calls this public Shdeps API by name.
+shdeps_bin_dir() { echo "$nvim_bin"; }
+# shellcheck disable=SC2329 # Hook calls this public Shdeps API by name.
+shdeps_pkg_mgr() { echo brew; }
+# shellcheck disable=SC2329 # Hook calls this public Shdeps API by name.
+shdeps_reinstall() { return 1; }
+# shellcheck disable=SC2329 # Hook calls this public Shdeps API by name.
+shdeps_platform_match() { return 1; }
+# shellcheck disable=SC2329 # Hook calls this public Shdeps API by name.
+shdeps_pkg_install_for_mgr() {
+  printf 'pkg:%s\n' "$*" >>"$nvim_calls"
+  return 0
+}
+PATH="$nvim_brew:/usr/bin:/bin" NVIM_TEST_BREW_PREFIX="$nvim_brew_prefix" \
+  install "neovim/neovim"
+if [[ -L "$nvim_home/neovim/neovim/bin/nvim" ]]; then
+  _pass "neovim: brew install exposes real binary behind launcher"
+else
+  _fail "neovim: brew install exposes real binary behind launcher"
+fi
+_assert_eq "neovim: brew real binary points at Homebrew nvim" \
+  "$nvim_brew_prefix/bin/nvim" "$(readlink "$nvim_home/neovim/neovim/bin/nvim")"
+_assert_file_missing "neovim: brew install leaves public launcher path alone" \
+  "$nvim_bin/nvim"
+if exists "neovim/neovim"; then
+  _pass "neovim: real binary satisfies exists check"
+else
+  _fail "neovim: real binary satisfies exists check"
+fi
+_assert_eq "neovim: version comes from real binary" "v0.12.0" \
+  "$(version "neovim/neovim")"
+
+nvim_termux_prefix=$(_tmpdir)
+mkdir -p "$nvim_termux_prefix/bin"
+cat >"$nvim_termux_prefix/bin/nvim" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' 'NVIM v0.12.3'
+EOF
+chmod +x "$nvim_termux_prefix/bin/nvim"
+# shellcheck disable=SC2329 # Hook calls this public Shdeps API by name.
+shdeps_platform_match() { [[ "${1:-}" == android ]]; }
+# shellcheck disable=SC2329 # Hook calls this public Shdeps API by name.
+shdeps_pkg_mgr() { echo apt; }
+# shellcheck disable=SC2329 # Hook calls this public Shdeps API by name.
+shdeps_pkg_install_for_mgr() {
+  printf 'pkg:%s\n' "$*" >>"$nvim_calls"
+  return 0
+}
+export PREFIX=$nvim_termux_prefix
+install "neovim/neovim"
+_assert_contains "neovim: Termux installs the native package" \
+  "pkg:apt:neovim" "$(cat "$nvim_calls")"
+_assert_eq "neovim: Termux real binary points at native nvim" \
+  "$nvim_termux_prefix/bin/nvim" \
+  "$(readlink "$nvim_home/neovim/neovim/bin/nvim")"
+
+# shellcheck disable=SC2329 # Hook calls this public Shdeps API by name.
+shdeps_platform_match() { return 1; }
+# shellcheck disable=SC2329 # Hook calls this public Shdeps API by name.
+shdeps_pkg_mgr() { echo apt; }
+# shellcheck disable=SC2329 # Hook calls this public Shdeps API by name.
+shdeps_github_release_install() {
+  printf 'release:%s|%s|%s|%s\n' "$1" "$2" "$3" "$4" >>"$nvim_calls"
+  : >"$4"
+}
+install "neovim/neovim"
+_assert_contains "neovim: github release uses a disposable side link" \
+  "release:neovim/neovim|nvim|neovim/neovim|$nvim_home/neovim/neovim/bin/nvim.shdeps-link" \
+  "$(cat "$nvim_calls")"
+_assert_file_missing "neovim: github release removes disposable side link" \
+  "$nvim_home/neovim/neovim/bin/nvim.shdeps-link"
+
+nvim_test_finish
