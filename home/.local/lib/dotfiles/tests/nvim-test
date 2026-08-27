@@ -207,15 +207,20 @@ eval "$saved_run_nvim_startup"
 _assert_eq "startup preparation: does not retry a child status 124" "124" "$startup_rc"
 _assert_file_content "startup preparation: child status 124 runs once" "120" \
   "$startup_mock_log"
-_assert_nvim_startup_budget "startup: .bashrc opens and exits within budget" "$HOME/.bashrc"
+if [[ ${DOT_PROFILE_FIXTURE:-0} == 1 &&
+  ${DOT_PROFILE_FIXTURE_PROFILE:-} == dev ]]; then
+  _pass "editor-only startup smoke is covered by the editor fixture"
+else
+  _assert_nvim_startup_budget "startup: .bashrc opens and exits within budget" "$HOME/.bashrc"
 
-result=$("$NVIM_TEST_BIN" --headless -i NONE \
-  --cmd 'lua vim.g.disable_session_restore = true' \
-  -u "$HOME/.config/nvim/init.lua" \
-  -c 'lua local plugins=require("lazy.core.config").plugins; local names={"nvim-lspconfig","mason.nvim","mason-lspconfig.nvim","conform.nvim","nvim-lint","lazydev.nvim","nvim-dap","mason-nvim-dap.nvim","copilot.lua","none-ls.nvim"}; local active={}; for _, name in ipairs(names) do if plugins[name] then table.insert(active, name) end end; table.sort(active); local inventory={}; for name, plugin in pairs(plugins) do if plugin.dir then table.insert(inventory, name .. "\t" .. plugin.dir) end end; table.sort(inventory); if vim.env.NVIM_TEST_GRAPH_INVENTORY and vim.env.NVIM_TEST_GRAPH_INVENTORY ~= "" then vim.fn.writefile(inventory, vim.env.NVIM_TEST_GRAPH_INVENTORY) end; print(table.concat(active, ","))' \
-  -c 'qa!' 2>&1)
-_assert_eq "editor plugin graph excludes development-only tooling" "" "$result"
-[[ -z ${NVIM_TEST_GRAPH_MARKER:-} ]] || : >"$NVIM_TEST_GRAPH_MARKER"
+  result=$("$NVIM_TEST_BIN" --headless -i NONE \
+    --cmd 'lua vim.g.disable_session_restore = true' \
+    -u "$HOME/.config/nvim/init.lua" \
+    -c 'lua local plugins=require("lazy.core.config").plugins; local names={"nvim-lspconfig","mason.nvim","mason-lspconfig.nvim","conform.nvim","nvim-lint","lazydev.nvim","nvim-dap","mason-nvim-dap.nvim","copilot.lua","none-ls.nvim"}; local active={}; for _, name in ipairs(names) do if plugins[name] then table.insert(active, name) end end; table.sort(active); local inventory={}; for name, plugin in pairs(plugins) do if plugin.dir then table.insert(inventory, name .. "\t" .. plugin.dir) end end; table.sort(inventory); if vim.env.NVIM_TEST_GRAPH_INVENTORY and vim.env.NVIM_TEST_GRAPH_INVENTORY ~= "" then vim.fn.writefile(inventory, vim.env.NVIM_TEST_GRAPH_INVENTORY) end; print(table.concat(active, ","))' \
+    -c 'qa!' 2>&1)
+  _assert_eq "editor plugin graph excludes development-only tooling" "" "$result"
+  [[ -z ${NVIM_TEST_GRAPH_MARKER:-} ]] || : >"$NVIM_TEST_GRAPH_MARKER"
+fi
 
 # ---------------------------------------------------------------------------
 # Tests: scheduled Lazy update lock

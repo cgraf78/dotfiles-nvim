@@ -4,6 +4,7 @@ nvim_test_launchers() {
   local launcher=$HOME/.local/bin/nvim result expected
   local nvim_launcher_home nvim_launcher_cwd nvim_launcher_provider
   local nvim_reuse_home nvim_missing_rc nvim_missing_output
+  local nvim_launcher_path=$PATH nvim_reuse_path=$PATH
 
   _nvim_launcher_test_shdeps() {
     local home=$1
@@ -29,6 +30,9 @@ SHDEPS
   nvim_launcher_provider="$nvim_launcher_home/termnav-nvim-launcher.sh"
   mkdir -p "$nvim_launcher_home/.local/share/neovim/neovim/bin" "$nvim_launcher_cwd"
   _nvim_launcher_test_shdeps "$nvim_launcher_home"
+  if [[ ${DOT_PROFILE_FIXTURE:-0} == 1 ]]; then
+    nvim_launcher_path=$nvim_launcher_home/.local/bin:$PATH
+  fi
 
   cat >"$nvim_launcher_home/.local/share/neovim/neovim/bin/nvim" <<'MOCK'
 #!/usr/bin/env bash
@@ -45,7 +49,8 @@ MOCK
 
   result=$(
     cd "$nvim_launcher_cwd" || exit
-    HOME="$nvim_launcher_home" NVIM_LAUNCHER_PROVIDER="$nvim_launcher_provider" \
+    HOME="$nvim_launcher_home" PATH="$nvim_launcher_path" \
+      NVIM_LAUNCHER_PROVIDER="$nvim_launcher_provider" \
       NVIM_TEST_REUSE=1 "$launcher" src/app.lua
   )
   _assert_eq "nvim launcher: delegates pane reuse to Termnav in the caller cwd" \
@@ -53,9 +58,13 @@ MOCK
 
   nvim_reuse_home=$(_tmpdir)
   _nvim_launcher_test_shdeps "$nvim_reuse_home"
+  if [[ ${DOT_PROFILE_FIXTURE:-0} == 1 ]]; then
+    nvim_reuse_path=$nvim_reuse_home/.local/bin:$PATH
+  fi
   result=$(
     cd "$nvim_launcher_cwd" || exit
-    HOME="$nvim_reuse_home" NVIM_LAUNCHER_PROVIDER="$nvim_launcher_provider" \
+    HOME="$nvim_reuse_home" PATH="$nvim_reuse_path" \
+      NVIM_LAUNCHER_PROVIDER="$nvim_launcher_provider" \
       NVIM_TEST_REUSE=1 "$launcher" src/app.lua
   )
   _assert_eq "nvim launcher: provider success does not require a fallback binary" \
@@ -63,7 +72,8 @@ MOCK
 
   result=$(
     cd "$nvim_launcher_cwd" || exit
-    HOME="$nvim_launcher_home" NVIM_LAUNCHER_PROVIDER="$nvim_launcher_provider" \
+    HOME="$nvim_launcher_home" PATH="$nvim_launcher_path" \
+      NVIM_LAUNCHER_PROVIDER="$nvim_launcher_provider" \
       "$launcher" src/app.lua
   )
   expected=$(printf 'provider:%s:src/app.lua\nreal:%s:src/app.lua' \
@@ -73,7 +83,8 @@ MOCK
 
   result=$(
     cd "$nvim_launcher_cwd" || exit
-    HOME="$nvim_launcher_home" NVIM_LAUNCHER_PROVIDER="$nvim_launcher_provider" \
+    HOME="$nvim_launcher_home" PATH="$nvim_launcher_path" \
+      NVIM_LAUNCHER_PROVIDER="$nvim_launcher_provider" \
       "$launcher" --headless 'src/file with spaces.lua'
   )
   expected=$(printf 'provider:%s:--headless src/file with spaces.lua\nreal:%s:--headless src/file with spaces.lua' \
@@ -84,7 +95,8 @@ MOCK
   nvim_missing_rc=0
   nvim_missing_output=$(
     cd "$nvim_launcher_cwd" || exit
-    HOME="$nvim_launcher_home" DOT_SHDEPS_TEST_MISSING=1 \
+    HOME="$nvim_launcher_home" PATH="$nvim_launcher_path" \
+      DOT_SHDEPS_TEST_MISSING=1 \
       NVIM_LAUNCHER_PROVIDER="$nvim_launcher_provider" \
       "$launcher" src/app.lua 2>&1
   ) || nvim_missing_rc=$?

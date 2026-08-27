@@ -17,6 +17,12 @@ nvim_test_merges() {
     "$api_home/.local/lib/dotfiles/merge-hooks.d/nvim.sh"
   cp "$source_home/.local/lib/dotfiles/merge-hooks.d/lib/compat.sh" \
     "$api_home/.local/lib/dotfiles/merge-hooks.d/lib/compat.sh"
+  for support in windows.sh agent-playbooks.sh shdeps-assets.sh; do
+    if [[ -f $source_home/.local/lib/dotfiles/merge-hooks.d/lib/$support ]]; then
+      cp "$source_home/.local/lib/dotfiles/merge-hooks.d/lib/$support" \
+        "$api_home/.local/lib/dotfiles/merge-hooks.d/lib/$support"
+    fi
+  done
   : >"$public_api_log"
   export NVIM_TEST_PUBLIC_HOOK_API_LOG=$public_api_log
   nvim_test_load_merge_api "$api_home" || {

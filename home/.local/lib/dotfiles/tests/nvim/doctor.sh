@@ -38,6 +38,10 @@ EOF
     "$api_home/.local/lib/dotfiles/doctor.d/lib/nvim.sh"
   cp "$HOME/.local/lib/dotfiles/doctor.d/lib/compat.sh" \
     "$api_home/.local/lib/dotfiles/doctor.d/lib/compat.sh"
+  if [[ -f $HOME/.local/lib/dotfiles/doctor.d/lib/shdeps-assets.sh ]]; then
+    cp "$HOME/.local/lib/dotfiles/doctor.d/lib/shdeps-assets.sh" \
+      "$api_home/.local/lib/dotfiles/doctor.d/lib/shdeps-assets.sh"
+  fi
 
   DOT_DOCTOR_RESULT_FILE=$tmp/doctor-results.tsv
   export DOT_DOCTOR_RESULT_FILE
