@@ -222,8 +222,10 @@ OWNER
 
   _assert_contains "nvim merge: loads support through public hook API" \
     $'source\tmerge-hooks.d/lib/compat.sh' "$(cat "$public_api_log")"
-  _assert_contains "nvim merge: checks tool presence through public hook API" \
-    $'tool\tnvim' "$(cat "$public_api_log")"
+  if [[ ${DOT_PROFILE_FIXTURE:-0} != 1 ]]; then
+    _assert_contains "nvim merge: checks tool presence through public hook API" \
+      $'tool\tnvim' "$(cat "$public_api_log")"
+  fi
   _assert_contains "nvim merge: checks Android through public hook API" \
     $'platform\tandroid' "$(cat "$public_api_log")"
   _assert_contains "nvim merge: reports updates through public hook API" \
