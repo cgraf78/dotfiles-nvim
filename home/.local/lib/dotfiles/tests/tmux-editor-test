@@ -3,8 +3,14 @@ set -u
 . "${BASH_SOURCE[0]%/*}/nvim/helpers.sh"
 fragment=$HOME/.config/tmux/conf.d/20-editor.conf
 fragment_content=$(<"$fragment")
+prerequisite_dir=$(_tmpdir)
+prerequisite=$prerequisite_dir/10-base-interface.conf
+cat >"$prerequisite" <<'EOF'
+navigate_parent_args="--parent --client-pid #{client_pid} --client-tty #{q:client_tty} --client-created #{client_created} --client-termtype #{q:client_termtype} --source-socket #{q:socket_path} --source-pane #{pane_id} --source-session #{q:session_id}"
+EOF
 socket=dotfiles-nvim-test-$$
 if ! tmux -L "$socket" -f /dev/null new-session -d 2>/dev/null ||
+  ! tmux -L "$socket" source-file "$prerequisite" 2>/dev/null ||
   ! tmux -L "$socket" source-file "$fragment" 2>/dev/null; then
   nvim_test_fail 'tmux accepts the editor fragment with a minimal inherited configuration'
   tmux -L "$socket" kill-server >/dev/null 2>&1 || true
@@ -13,6 +19,13 @@ fi
 
 root_keys=$(tmux -L "$socket" list-keys -T root | sed -E 's/^bind-key[[:space:]]+-T /bind-key -T /')
 prefix_keys=$(tmux -L "$socket" list-keys -T prefix | sed -E 's/^bind-key[[:space:]]+-T /bind-key -T /')
+mouse=$(tmux -L "$socket" show-options -gv mouse)
+native_nvim=$(tmux -L "$socket" display-message -p \
+  '#{m/r:^g?(view|l?n?vim?x?|fzf)(diff)?$,nvim}')
+native_fzf=$(tmux -L "$socket" display-message -p \
+  '#{m/r:^g?(view|l?n?vim?x?|fzf)(diff)?$,fzf}')
+native_shell=$(tmux -L "$socket" display-message -p \
+  '#{m/r:^g?(view|l?n?vim?x?|fzf)(diff)?$,bash}')
 ctrl_tab=$(printf '%s\n' "$root_keys" | grep 'bind-key -T root C-Tab ' || true)
 ctrl_shift_tab=$(printf '%s\n' "$root_keys" | grep 'bind-key -T root C-BTab ' || true)
 pane_left=$(printf '%s\n' "$root_keys" | grep 'bind-key -T root C-h ' || true)
@@ -22,19 +35,42 @@ pane_right=$(printf '%s\n' "$root_keys" | grep 'bind-key -T root C-l ' || true)
 backslash=$'\\'
 previous_pane=$(printf '%s\n' "$root_keys" |
   grep -F "bind-key -T root C-${backslash}${backslash} " || true)
+mouse_down=$(printf '%s\n' "$root_keys" | grep 'bind-key -T root C-MouseDown1Pane ' || true)
+mouse_drag=$(printf '%s\n' "$root_keys" | grep 'bind-key -T root C-MouseDrag1Pane ' || true)
 mouse_up=$(printf '%s\n' "$root_keys" | grep 'bind-key -T root C-MouseUp1Pane ' || true)
+clipboard_paste=$(printf '%s\n' "$root_keys" | grep 'bind-key -T root C-S-v ' || true)
 open_link=$(printf '%s\n' "$prefix_keys" | grep 'bind-key -T prefix e ' || true)
+move_tab_left=$(printf '%s\n' "$root_keys" |
+  grep -F 'bind-key -T root "M-{" ' || true)
+move_tab_right=$(printf '%s\n' "$root_keys" |
+  grep -F 'bind-key -T root "M-}" ' || true)
 
 _assert_contains 'tmux editor runtime forwards Ctrl-Tab to an editor pane' \
   "send-keys Escape '[9;5u'" "$ctrl_tab"
 _assert_contains 'tmux editor runtime forwards Ctrl-Shift-Tab to an editor pane' \
   "send-keys Escape '[9;6u'" "$ctrl_shift_tab"
+_assert_eq 'tmux editor runtime enables mouse integration' on "$mouse"
+_assert_eq 'tmux editor native detector matches Nvim' 1 "$native_nvim"
+_assert_eq 'tmux editor native detector matches fzf' 1 "$native_fzf"
+_assert_eq 'tmux editor native detector leaves shells local' 0 "$native_shell"
+_assert_contains 'tmux editor runtime keeps multi-window next-tab native' \
+  '#{>:#{session_windows},1}' "$ctrl_tab"
+_assert_contains 'tmux editor runtime keeps multi-window previous-tab native' \
+  '#{>:#{session_windows},1}' "$ctrl_shift_tab"
+_assert_contains 'tmux editor runtime routes the next tab edge through Termnav' \
+  'termnav navigate tab-select next --parent' "$ctrl_tab"
+_assert_contains 'tmux editor runtime routes the previous tab edge through Termnav' \
+  'termnav navigate tab-select previous --parent' "$ctrl_shift_tab"
 _assert_contains 'tmux editor runtime routes the next tab boundary through Termnav' \
-  'termnav-relay navigate tab-select next' "$fragment_content"
+  'termnav navigate tab-select next' "$fragment_content"
 _assert_contains 'tmux editor runtime routes the previous tab boundary through Termnav' \
-  'termnav-relay navigate tab-select previous' "$fragment_content"
+  'termnav navigate tab-select previous' "$fragment_content"
+_assert_not_contains 'tmux editor runtime retires the old relay wrapper' \
+  'termnav-relay' "$fragment_content"
 _assert_not_contains 'tmux editor runtime retires the old navigation command' \
   'termnav-navigate' "$fragment_content"
+_assert_not_contains 'tmux editor fragment inherits router origin metadata from base' \
+  'navigate_parent_args=' "$fragment_content"
 route_lines=("$pane_left" "$pane_down" "$pane_up" "$pane_right")
 route_directions=(left down up right)
 route_native=('select-pane -L' 'select-pane -D' 'select-pane -U' 'select-pane -R')
@@ -45,30 +81,123 @@ for route_index in "${!route_lines[@]}"; do
   _assert_contains "tmux editor runtime keeps $direction selection native" \
     "$native" "$line"
   _assert_contains "tmux editor runtime routes the $direction boundary through Termnav" \
-    "termnav-relay navigate pane-select $direction --parent" "$line"
+    "termnav navigate pane-select $direction --parent" "$line"
   _assert_not_contains "tmux editor runtime retires the old $direction router" \
     'termnav-navigate' "$line"
   _assert_contains "tmux editor runtime preserves the source pane for $direction routing" \
     '--source-pane #{pane_id}' "$line"
 done
+_assert_eq 'tmux editor runtime has four native pane selections' 4 \
+  "$(printf '%s\n' "${route_lines[@]}" | awk '/select-pane -[LDUR]/ { count++ } END { print count + 0 }')"
+_assert_eq 'tmux editor runtime has four pane boundary routes' 4 \
+  "$(printf '%s\n' "${route_lines[@]}" | awk '/termnav navigate pane-select/ { count++ } END { print count + 0 }')"
 _assert_contains 'tmux editor runtime forwards Ctrl-backslash inside navigation-aware panes' \
   "send-keys C-${backslash}${backslash}${backslash}${backslash}" \
   "$previous_pane"
 _assert_contains 'tmux editor runtime keeps previous-pane selection local' \
   'select-pane -l' "$previous_pane"
+_assert_not_contains 'tmux editor runtime does not route previous-pane outward' \
+  'termnav navigate' "$previous_pane"
+_assert_contains 'tmux editor runtime forwards Ctrl-click into mouse-aware panes' \
+  'send-keys -M' "$mouse_down"
+_assert_contains 'tmux editor runtime keeps Ctrl-drag inside mouse-aware panes' \
+  'send-keys -M' "$mouse_drag"
 _assert_contains 'tmux editor runtime passes the complete click record to Termnav' \
   '#{mouse_hyperlink}\\n#{mouse_word}\\n#{mouse_line}\\n#{mouse_x}\\n#{pane_current_path}\\n#{client_tty}\\n#{pane_id}\\n#{mouse_y}\\n#{pane_top}\\n#{pane_left}' \
   "$mouse_up"
+_assert_contains 'tmux editor runtime routes clicks through native Termnav' \
+  'termnav tmux follow-click --stdin' "$mouse_up"
 _assert_contains 'tmux editor runtime opens prompted links through the Nvim adapter' \
-  'nvim-tmux-open link' "$open_link"
+  'termnav nvim open link' "$open_link"
+_assert_contains 'tmux editor runtime keeps the clipboard paste protocol' \
+  'send-keys Escape [778899~' "$clipboard_paste"
+for move_tab in "$move_tab_left" "$move_tab_right"; do
+  _assert_contains 'tmux editor runtime forwards tab moves through Nvim and fzf' \
+    'view|l?n?vim?x?|fzf' "$move_tab"
+done
+
+for route_line in \
+  "$ctrl_tab" "$ctrl_shift_tab" \
+  "$pane_left" "$pane_down" "$pane_up" "$pane_right"; do
+  for metadata in \
+    '--client-pid #{client_pid}' \
+    '--client-tty #{q:client_tty}' \
+    '--client-created #{client_created}' \
+    '--source-socket #{q:socket_path}' \
+    '--source-pane #{pane_id}' \
+    '--source-session #{q:session_id}'; do
+    _assert_contains "tmux editor runtime route keeps ${metadata%% *}" \
+      "$metadata" "$route_line"
+  done
+done
+
+_assert_contains 'tmux editor detector uses native pane metadata' \
+  '#{pane_current_command}' "$fragment_content"
+_assert_contains 'tmux editor detector retains the process fallback' \
+  'pgid= -o tpgid=' "$fragment_content"
+_assert_contains 'tmux editor pane routing requires mouse ownership for transports' \
+  'mouse == 1' "$fragment_content"
+_assert_contains 'tmux editor pane routing recognizes remote transports' \
+  'ssh|mosh|mosh-client|mosh-server|et' "$fragment_content"
+_assert_contains 'tmux editor pane routing recognizes nested multiplexers' \
+  'tmux|screen' "$fragment_content"
+_assert_not_contains 'tmux editor navigation has no terminal-specific VS Code branch' \
+  '#{m:xterm.js*,#{client_termtype}}' "$fragment_content"
+# shellcheck disable=SC2016 # Match the retired literal shell construction.
+_assert_not_contains 'tmux editor navigation has no inline payload construction' \
+  'payload=$(' "$fragment_content"
+_assert_not_contains 'tmux editor boundary routes remain foreground-ordered' \
+  "run-shell -b '~/.local/bin/termnav navigate" "$fragment_content"
+for retired in termnav-switch-tab wezterm-switch-tab wezterm-move-tab \
+  wezterm-select-pane DOT_PARENT_SWITCH_TAB DOT_PARENT_MOVE_TAB \
+  DOT_PARENT_SELECT_PANE; do
+  _assert_not_contains "tmux editor retired route stays absent: $retired" \
+    "$retired" "$fragment_content"
+done
 
 pane_filter=$(printf '%s\n' "$pane_left" |
   sed -n "s/.*awk -v mouse='#{mouse_any_flag}' '\\(.*\\)'\" \"send-keys C-h\".*/\\1/p")
 _assert_contains 'tmux editor runtime preserves the process fallback after parsing' \
   'END { exit !found }' "$pane_filter"
+# shellcheck disable=SC2016 # Assert that the generated AWK keeps no escaped field token.
+_assert_not_contains 'tmux editor runtime fallback has no escaped AWK fields' \
+  '\$NF' "$pane_left"
 printf 'S+ bash 39056 39056\nS+ tmux: client 39056 39056\n' |
   awk -v mouse=1 "$pane_filter"
 _assert_exit 'tmux editor process fallback identifies a nested focused tmux' 0 "$?"
+printf 'S+ ssh 39056 39056\n' | awk -v mouse=0 "$pane_filter"
+_assert_exit 'tmux editor keeps a plain SSH shell at the outer layer' 1 "$?"
+printf 'S+ ssh 39056 39056\n' | awk -v mouse=1 "$pane_filter"
+_assert_exit 'tmux editor forwards into a mouse-aware remote application' 0 "$?"
+printf 'S+ bash 39056 39056\nS ssh 39100 39056\nS tmux: client 39101 39056\n' |
+  awk -v mouse=1 "$pane_filter"
+_assert_exit 'tmux editor ignores background transports and clients' 1 "$?"
+vim_filter=$(
+  cat <<'AWK'
+$3 == $4 && $1 !~ /^[TXZ]/ && $2 ~ /^g?(view|l?n?vim?x?|fzf)(diff)?$/ { found = 1 }
+END { exit !found }
+AWK
+)
+printf 'S+ fd 39056 39056\nS+ fzf 39056 39056\n' | awk "$vim_filter"
+_assert_exit 'tmux editor process fallback matches fzf behind a pipeline' 0 "$?"
 
 tmux -L "$socket" kill-server >/dev/null 2>&1 || true
+
+if command -v python3 >/dev/null 2>&1; then
+  if pty_output=$(python3 \
+    "${BASH_SOURCE[0]%/*}/support/tmux-editor-navigation.py" \
+    --config "$fragment" 2>&1); then
+    pty_status=0
+  else
+    pty_status=$?
+  fi
+  printf '%s\n' "$pty_output"
+  _assert_exit 'tmux editor PTY navigation coverage passes' 0 "$pty_status"
+  _assert_contains 'tmux editor PTY tests local Ctrl-backslash' \
+    'test_ctrl_backslash_selects_the_local_previous_pane' "$pty_output"
+  _assert_contains 'tmux editor PTY tests nested Ctrl-backslash' \
+    'test_ctrl_backslash_forwards_through_a_nested_tmux' "$pty_output"
+else
+  _pass 'tmux editor Python unavailable, PTY coverage skipped'
+fi
 nvim_test_finish

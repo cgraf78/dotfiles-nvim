@@ -9,7 +9,7 @@ nvim_test_contains 'ripgrep linkification uses the editor-owned host adapter' \
 nvim_test_assert 'ripgrep host adapter is executable' \
   test -x "$HOME/.local/bin/ripgrep-link-host"
 nvim_test_contains 'tmux click routing uses the Neovim opener' \
-  'tmux-follow-click --stdin' "$fragment"
+  'termnav tmux follow-click --stdin' "$fragment"
 nvim_test_assert 'link route fixture is present' test -s "$fixture"
 
 route_check=$(_tmpdir)/route-check.py
