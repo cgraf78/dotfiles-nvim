@@ -43,7 +43,7 @@ remote_predicate() {
   remote_tmp=$(mktemp -d)
   trap 'rm -rf -- "$remote_tmp"' RETURN
   gh api --method GET repos/cgraf78/dotfiles/contents/.github/LICENSE \
-    -f ref=53655eefc3080b1fe361f48f9943df5cb3c4a374 --jq .content |
+    -f ref=12ffa6b4ec3cd95b3d52f4d9fe62cf1c10d37dea --jq .content |
     base64 --decode >"$remote_tmp/source-LICENSE"
   gh api --method GET "repos/cgraf78/$repo_name/contents/LICENSE" --jq .content |
     base64 --decode >"$remote_tmp/target-LICENSE"
@@ -84,7 +84,7 @@ single_sha() {
 single_sha .github/cgraf78-actions.lock de3f6086e36a77eec8ee62f2c9871266e4b5c05c
 single_sha .github/dot.lock 3278c54e3535017c5fb48477fac3710c8172b9d8
 
-expected_source=$'version=1\nrepository=cgraf78/dotfiles\ncommit=53655eefc3080b1fe361f48f9943df5cb3c4a374\nlicense_path=.github/LICENSE'
+expected_source=$'version=1\nrepository=cgraf78/dotfiles\ncommit=12ffa6b4ec3cd95b3d52f4d9fe62cf1c10d37dea\nlicense_path=.github/LICENSE'
 [[ $(<.github/dotfiles-source.lock) == "$expected_source" ]] || fail 'source lock is not canonical'
 if LC_ALL=C grep -q $'\r' .github/dotfiles-source.lock; then fail 'source lock contains CRLF'; fi
 
@@ -96,10 +96,10 @@ fi
 [[ $license_hash == bfaed6d8fb29d7208c1266afa313681591d6ca05ec2f7e005cebe3d7a7b43579 ]] || fail 'LICENSE bytes differ from the frozen MIT license'
 [[ $(wc -c <LICENSE | tr -d '[:space:]') == 1067 ]] || fail 'LICENSE size differs from the frozen MIT license'
 if [[ -n ${DOTFILES_SOURCE_REPO:-} ]]; then
-  git -C "$DOTFILES_SOURCE_REPO" cat-file -e '53655eefc3080b1fe361f48f9943df5cb3c4a374^{commit}'
-  cmp LICENSE <(git -C "$DOTFILES_SOURCE_REPO" show 53655eefc3080b1fe361f48f9943df5cb3c4a374:.github/LICENSE)
-  cmp .github/dependabot.yml <(git -C "$DOTFILES_SOURCE_REPO" show 53655eefc3080b1fe361f48f9943df5cb3c4a374:.github/dependabot.yml)
-  cmp .github/workflows/retry-infrastructure.yml <(git -C "$DOTFILES_SOURCE_REPO" show 53655eefc3080b1fe361f48f9943df5cb3c4a374:.github/workflows/retry-infrastructure.yml)
+  git -C "$DOTFILES_SOURCE_REPO" cat-file -e '12ffa6b4ec3cd95b3d52f4d9fe62cf1c10d37dea^{commit}'
+  cmp LICENSE <(git -C "$DOTFILES_SOURCE_REPO" show 12ffa6b4ec3cd95b3d52f4d9fe62cf1c10d37dea:.github/LICENSE)
+  cmp .github/dependabot.yml <(git -C "$DOTFILES_SOURCE_REPO" show 12ffa6b4ec3cd95b3d52f4d9fe62cf1c10d37dea:.github/dependabot.yml)
+  cmp .github/workflows/retry-infrastructure.yml <(git -C "$DOTFILES_SOURCE_REPO" show 12ffa6b4ec3cd95b3d52f4d9fe62cf1c10d37dea:.github/workflows/retry-infrastructure.yml)
 fi
 [[ $(<.gitignore) == '.worktrees/' ]] || fail '.gitignore must contain only .worktrees/'
 manifest_hash=$(sha256sum .github/repository-settings-endpoints.txt 2>/dev/null | awk '{print $1}' || shasum -a 256 .github/repository-settings-endpoints.txt | awk '{print $1}')
