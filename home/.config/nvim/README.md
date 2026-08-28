@@ -20,5 +20,9 @@ dev-overlay policy.
 they are present. Editor-only machines therefore do not require development
 modules.
 
+Termnav owns Ctrl-h/j/k/l pane selection, Ctrl-backslash previous-pane
+selection, Ctrl-Tab switching, Alt-Shift-bracket tab movement, and
+Alt-Shift-H/J/K/L pane movement across Neovim and tmux boundaries.
+
 The focused suites under `~/.local/lib/dotfiles/tests/` check editor startup,
 plugin specs, shell/tmux integration, the launcher, update hook, and doctor.

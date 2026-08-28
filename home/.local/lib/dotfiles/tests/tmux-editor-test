@@ -6,7 +6,7 @@ fragment_content=$(<"$fragment")
 prerequisite_dir=$(_tmpdir)
 prerequisite=$prerequisite_dir/10-base-interface.conf
 cat >"$prerequisite" <<'EOF'
-navigate_parent_args="--parent --client-pid #{client_pid} --client-tty #{q:client_tty} --client-created #{client_created} --client-termtype #{q:client_termtype} --source-socket #{q:socket_path} --source-pane #{pane_id} --source-session #{q:session_id}"
+navigate_origin_args="--client-pid #{client_pid} --client-tty #{q:client_tty} --client-created #{client_created} --client-termtype #{q:client_termtype} --source-socket #{q:socket_path} --source-pane #{pane_id} --source-session #{q:session_id}"
 EOF
 socket=dotfiles-nvim-test-$$
 if ! tmux -L "$socket" -f /dev/null new-session -d 2>/dev/null ||
@@ -32,6 +32,10 @@ pane_left=$(printf '%s\n' "$root_keys" | grep 'bind-key -T root C-h ' || true)
 pane_down=$(printf '%s\n' "$root_keys" | grep 'bind-key -T root C-j ' || true)
 pane_up=$(printf '%s\n' "$root_keys" | grep 'bind-key -T root C-k ' || true)
 pane_right=$(printf '%s\n' "$root_keys" | grep 'bind-key -T root C-l ' || true)
+pane_move_left=$(printf '%s\n' "$root_keys" | grep 'bind-key -T root M-H ' || true)
+pane_move_down=$(printf '%s\n' "$root_keys" | grep 'bind-key -T root M-J ' || true)
+pane_move_up=$(printf '%s\n' "$root_keys" | grep 'bind-key -T root M-K ' || true)
+pane_move_right=$(printf '%s\n' "$root_keys" | grep 'bind-key -T root M-L ' || true)
 backslash=$'\\'
 previous_pane=$(printf '%s\n' "$root_keys" |
   grep -F "bind-key -T root C-${backslash}${backslash} " || true)
@@ -70,7 +74,7 @@ _assert_not_contains 'tmux editor runtime retires the old relay wrapper' \
 _assert_not_contains 'tmux editor runtime retires the old navigation command' \
   'termnav-navigate' "$fragment_content"
 _assert_not_contains 'tmux editor fragment inherits router origin metadata from base' \
-  'navigate_parent_args=' "$fragment_content"
+  'navigate_origin_args=' "$fragment_content"
 route_lines=("$pane_left" "$pane_down" "$pane_up" "$pane_right")
 route_directions=(left down up right)
 route_native=('select-pane -L' 'select-pane -D' 'select-pane -U' 'select-pane -R')
@@ -91,6 +95,20 @@ _assert_eq 'tmux editor runtime has four native pane selections' 4 \
   "$(printf '%s\n' "${route_lines[@]}" | awk '/select-pane -[LDUR]/ { count++ } END { print count + 0 }')"
 _assert_eq 'tmux editor runtime has four pane boundary routes' 4 \
   "$(printf '%s\n' "${route_lines[@]}" | awk '/termnav navigate pane-select/ { count++ } END { print count + 0 }')"
+move_lines=("$pane_move_left" "$pane_move_down" "$pane_move_up" "$pane_move_right")
+move_directions=(left down up right)
+move_keys=(H J K L)
+for move_index in "${!move_lines[@]}"; do
+  line=${move_lines[move_index]}
+  direction=${move_directions[move_index]}
+  key=${move_keys[move_index]}
+  _assert_contains "tmux editor runtime forwards M-$key into an owning application" \
+    "send-keys Escape '$key'" "$line"
+  _assert_contains "tmux editor runtime moves the $direction pane through Termnav" \
+    "termnav navigate pane-move $direction" "$line"
+  _assert_not_contains "tmux editor runtime starts $direction pane movement locally" \
+    '--parent' "$line"
+done
 _assert_contains 'tmux editor runtime forwards Ctrl-backslash inside navigation-aware panes' \
   "send-keys C-${backslash}${backslash}${backslash}${backslash}" \
   "$previous_pane"
@@ -118,7 +136,8 @@ done
 
 for route_line in \
   "$ctrl_tab" "$ctrl_shift_tab" \
-  "$pane_left" "$pane_down" "$pane_up" "$pane_right"; do
+  "$pane_left" "$pane_down" "$pane_up" "$pane_right" \
+  "$pane_move_left" "$pane_move_down" "$pane_move_up" "$pane_move_right"; do
   for metadata in \
     '--client-pid #{client_pid}' \
     '--client-tty #{q:client_tty}' \
