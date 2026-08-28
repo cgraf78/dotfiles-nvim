@@ -42,7 +42,8 @@ previous_pane=$(printf '%s\n' "$root_keys" |
 mouse_down=$(printf '%s\n' "$root_keys" | grep 'bind-key -T root C-MouseDown1Pane ' || true)
 mouse_drag=$(printf '%s\n' "$root_keys" | grep 'bind-key -T root C-MouseDrag1Pane ' || true)
 mouse_up=$(printf '%s\n' "$root_keys" | grep 'bind-key -T root C-MouseUp1Pane ' || true)
-clipboard_paste=$(printf '%s\n' "$root_keys" | grep 'bind-key -T root C-S-v ' || true)
+clipboard_paste=$(printf '%s\n' "$root_keys" |
+  grep -F 'send-keys Escape [778899~' || true)
 open_link=$(printf '%s\n' "$prefix_keys" | grep 'bind-key -T prefix e ' || true)
 move_tab_left=$(printf '%s\n' "$root_keys" |
   grep -F 'bind-key -T root "M-{" ' || true)
@@ -129,6 +130,8 @@ _assert_contains 'tmux editor runtime opens prompted links through the Nvim adap
   'termnav nvim open link' "$open_link"
 _assert_contains 'tmux editor runtime keeps the clipboard paste protocol' \
   'send-keys Escape [778899~' "$clipboard_paste"
+_assert_contains 'tmux editor source assigns the clipboard protocol to C-S-v' \
+  "bind -n C-S-v send-keys Escape '[778899~'" "$fragment_content"
 for move_tab in "$move_tab_left" "$move_tab_right"; do
   _assert_contains 'tmux editor runtime forwards tab moves through Nvim and fzf' \
     'view|l?n?vim?x?|fzf' "$move_tab"

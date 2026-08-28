@@ -137,9 +137,17 @@ class EditorNavigationTest(unittest.TestCase):
     config: pathlib.Path
 
     def setUp(self) -> None:
-        short_root = pathlib.Path("/tmp")
-        short_root_usable = short_root.is_dir() and os.access(short_root, os.W_OK | os.X_OK)
-        temporary_parent = str(short_root) if short_root_usable else None
+        short_roots = [pathlib.Path("/tmp")]
+        if prefix := os.environ.get("PREFIX"):
+            short_roots.append(pathlib.Path(prefix) / "tmp")
+        temporary_parent = next(
+            (
+                str(root)
+                for root in short_roots
+                if root.is_dir() and os.access(root, os.W_OK | os.X_OK)
+            ),
+            None,
+        )
         self.temporary = tempfile.TemporaryDirectory(
             prefix="dot-editor-navigation-", dir=temporary_parent
         )
