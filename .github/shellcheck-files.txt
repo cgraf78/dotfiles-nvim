@@ -9,6 +9,7 @@ program	home/.config/shell/env.d/60-editor.sh
 program	home/.config/shell/env.d/80-editor-defaults.sh
 program	home/.config/shell/interactive.d/60-editor-aliases.sh
 program	home/.local/bin/nvim
+program	home/.local/bin/ripgrep-link-host
 program	home/.local/lib/dotfiles/doctor.d/70-nvim.sh
 program	home/.local/lib/dotfiles/doctor.d/lib/nvim.sh
 program	home/.local/lib/dotfiles/merge-hooks.d/nvim.sh

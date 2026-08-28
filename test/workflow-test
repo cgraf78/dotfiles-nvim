@@ -138,6 +138,7 @@ expected_shell_files=(
   home/.config/shell/env.d/80-editor-defaults.sh
   home/.config/shell/interactive.d/60-editor-aliases.sh
   home/.local/bin/nvim
+  home/.local/bin/ripgrep-link-host
   home/.local/lib/dotfiles/doctor.d/70-nvim.sh
   home/.local/lib/dotfiles/doctor.d/lib/nvim.sh
   home/.local/lib/dotfiles/merge-hooks.d/nvim.sh

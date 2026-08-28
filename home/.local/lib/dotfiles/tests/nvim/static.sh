@@ -24,6 +24,8 @@ nvim_test_static() {
     "$owner_root/home/.config/shell/env.d/80-editor-defaults.sh"
   nvim_test_contains 'editor profile defines vi alias' "alias vi='nvim'" \
     "$owner_root/home/.config/shell/interactive.d/60-editor-aliases.sh"
-  nvim_test_contains 'ripgrep editor config owns link host routing' '--hostname-bin=nvim-link-host' \
+  nvim_test_contains 'ripgrep editor config owns link host routing' '--hostname-bin=ripgrep-link-host' \
     "$owner_root/home/.config/ripgrep/config.editor"
+  nvim_test_assert 'ripgrep editor adapter is executable' \
+    test -x "$owner_root/home/.local/bin/ripgrep-link-host"
 }
