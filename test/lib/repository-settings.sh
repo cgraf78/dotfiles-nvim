@@ -76,7 +76,42 @@ merge_paginated_arrays() {
 status_allowed() {
   local status=$1 absence=$2
   case $absence:$status in
-    forbidden:200 | forbidden:204 | conflict_when_all:409 | empty:200 | no_content:204 | no_content_or_not_found:204 | no_content_or_not_found:404 | empty_object:200 | not_found:404) return 0 ;;
+    forbidden:200 | forbidden:204 | conflict_when_all:409 | empty:200 | no_content:200 | no_content:204 | no_content_or_not_found:200 | no_content_or_not_found:204 | no_content_or_not_found:404 | empty_object:200 | not_found:404) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+http_none_state() {
+  local status=$1 body=$2
+  case $status in
+    200) jq -e 'type == "object" and length == 0' "$body" >/dev/null ;;
+    204) [[ ! -s $body ]] ;;
+    *) return 1 ;;
+  esac
+}
+
+http_boolean_value() {
+  local status=$1 body=$2
+  case $status in
+    200)
+      jq -r '
+        if type == "object"
+          and (.enabled | type == "boolean")
+          and (.paused | type == "boolean")
+          and .paused == false
+        then .enabled | tostring
+        else error("invalid structured boolean state")
+        end
+      ' "$body"
+      ;;
+    204)
+      [[ ! -s $body ]] || return 1
+      printf 'true\n'
+      ;;
+    404)
+      [[ ! -s $body ]] || return 1
+      printf 'false\n'
+      ;;
     *) return 1 ;;
   esac
 }
@@ -99,10 +134,11 @@ source_state_allowed() {
     main_protection) [[ $status == 200 ]] && jq -e 'type == "object" and (.required_status_checks | type == "object") and (.enforce_admins.enabled | type == "boolean")' "$body" >/dev/null ;;
     topics) [[ $status == 200 ]] && jq -e '.names | type == "array"' "$body" >/dev/null ;;
     vulnerability_alerts) [[ $status == 204 && ! -s $body ]] ;;
-    automated_security_fixes) [[ ($status == 204 || $status == 404) && ! -s $body ]] ;;
+    automated_security_fixes) http_boolean_value "$status" "$body" >/dev/null ;;
     private_vulnerability_reporting) [[ $status == 200 ]] && jq -e '.enabled | type == "boolean"' "$body" >/dev/null ;;
-    code_security_configuration) [[ $status == 204 && ! -s $body ]] ;;
-    interaction_limits) [[ $status == 204 && ! -s $body ]] ;;
+    code_security_configuration | interaction_limits)
+      http_none_state "$status" "$body"
+      ;;
     pages) [[ $status == 404 ]] ;;
     environments) [[ $status == 200 && $(jq '.environments | length' "$body") == 0 ]] ;;
     *) return 1 ;;
@@ -157,7 +193,7 @@ export_policy() {
 }
 
 normalize() {
-  local family=$1 normalizer=$2 status=$3 body=$4
+  local family=$1 normalizer=$2 status=$3 body=$4 value
   case $normalizer in
     repository)
       [[ $status == 200 ]] || {
@@ -176,7 +212,21 @@ normalize() {
     topics) jq -S '.names |= sort' "$body" ;;
     rulesets) jq -S 'flatten | sort_by(.name)' "$body" ;;
     environments) jq -S '.environments // [] | map(walk(if type == "object" then del(.id,.node_id,.url,.html_url,.deployment_branch_policy.url) else . end)) | sort_by(.name)' "$body" ;;
-    http_boolean | http_none | http_absent) printf 'status=%s\n' "$status" ;;
+    http_boolean)
+      value=$(http_boolean_value "$status" "$body") || {
+        printf 'status=%s\n' "$status"
+        return
+      }
+      printf 'enabled=%s\npaused=false\n' "$value"
+      ;;
+    http_none)
+      if http_none_state "$status" "$body"; then
+        printf 'status=204\n'
+      else
+        printf 'status=%s\n' "$status"
+      fi
+      ;;
+    http_absent) printf 'status=%s\n' "$status" ;;
     exact)
       if [[ -s $body ]]; then jq -S . "$body"; else printf 'status=%s\n' "$status"; fi
       ;;
@@ -222,7 +272,7 @@ protection_apply_payload() {
 
 apply_one() {
   local family=$1 target=$2 source_dir=$3 apply_method=$4 apply_path=$5
-  local path status body payload id name
+  local path status body payload id name enabled
   status=$(<"$source_dir/$family.status")
   body=$source_dir/$family.body
   render_path "$apply_path" "$target"
@@ -249,11 +299,13 @@ apply_one() {
       if [[ $status == 204 ]]; then gh api --method PUT "$path" >/dev/null; else gh api --method DELETE "$path" >/dev/null || true; fi
       ;;
     automated_security_fixes)
-      case $status in
-        204) gh api --method PUT "$path" >/dev/null ;;
-        404) gh api --method DELETE "$path" >/dev/null || true ;;
-        *) die "unexpected source status for $family: $status" ;;
-      esac
+      enabled=$(http_boolean_value "$status" "$body") ||
+        die "unexpected source state for $family: $status"
+      if [[ $enabled == true ]]; then
+        gh api --method PUT "$path" >/dev/null
+      else
+        gh api --method DELETE "$path" >/dev/null || true
+      fi
       ;;
     private_vulnerability_reporting)
       [[ $status == 200 ]] || die "unexpected source status for $family: $status"
@@ -264,11 +316,12 @@ apply_one() {
       fi
       ;;
     code_security_configuration)
-      [[ $status == 204 ]] || die 'source unexpectedly has an attached code-security configuration'
+      http_none_state "$status" "$body" ||
+        die 'source unexpectedly has an attached code-security configuration'
       gh api --method DELETE "$path" >/dev/null 2>&1 || true
       ;;
     interaction_limits)
-      [[ $status == 204 && ! -s $body ]] || die 'source interaction limit is not empty'
+      http_none_state "$status" "$body" || die 'source interaction limit is not empty'
       gh api --method DELETE "$path" >/dev/null 2>&1 || true
       ;;
     pages)
@@ -328,21 +381,43 @@ self_test() {
     die 'preflight accepted an empty actions-permissions source'
   fi
   printf '{"enabled":"invalid","paused":false}\n' >"$body"
-  if source_state_allowed automated_security_fixes 200 forbidden "$body"; then
+  if source_state_allowed automated_security_fixes 200 no_content_or_not_found "$body" 2>/dev/null; then
     die 'preflight accepted a malformed enabled value'
+  fi
+  printf '{"enabled":true,"paused":false}\n' >"$body"
+  source_state_allowed automated_security_fixes 200 no_content_or_not_found "$body" ||
+    die 'preflight rejected structured automated security fixes state'
+  normalize automated_security_fixes http_boolean 200 "$body" >"$tmp.normalized"
+  [[ $(<"$tmp.normalized") == $'enabled=true\npaused=false' ]] ||
+    die 'structured automated security fixes state was not normalized'
+  printf '{"enabled":true,"paused":true}\n' >"$body"
+  if source_state_allowed automated_security_fixes 200 no_content_or_not_found "$body" 2>/dev/null; then
+    die 'preflight accepted an unsupported paused automated security fixes state'
   fi
   : >"$body"
   source_state_allowed automated_security_fixes 204 no_content_or_not_found "$body" ||
     die 'preflight rejected enabled automated security fixes'
+  normalize automated_security_fixes http_boolean 204 "$body" >"$tmp.normalized"
+  [[ $(<"$tmp.normalized") == $'enabled=true\npaused=false' ]] ||
+    die 'legacy enabled automated security fixes state was not normalized'
   source_state_allowed automated_security_fixes 404 no_content_or_not_found "$body" ||
     die 'preflight rejected disabled automated security fixes'
-  if source_state_allowed automated_security_fixes 200 no_content_or_not_found "$body"; then
-    die 'preflight accepted undocumented automated security fixes status'
-  fi
+  normalize automated_security_fixes http_boolean 404 "$body" >"$tmp.normalized"
+  [[ $(<"$tmp.normalized") == $'enabled=false\npaused=false' ]] ||
+    die 'legacy disabled automated security fixes state was not normalized'
   source_state_allowed interaction_limits 204 no_content "$body" ||
     die 'preflight rejected absent interaction limits'
-  if source_state_allowed interaction_limits 200 no_content "$body"; then
-    die 'preflight accepted undocumented interaction limits status'
+  printf '{}\n' >"$body"
+  source_state_allowed interaction_limits 200 no_content "$body" ||
+    die 'preflight rejected structured empty interaction limits'
+  source_state_allowed code_security_configuration 200 no_content "$body" ||
+    die 'preflight rejected structured empty code security configuration'
+  normalize interaction_limits http_none 200 "$body" >"$tmp.normalized"
+  [[ $(<"$tmp.normalized") == 'status=204' ]] ||
+    die 'structured empty state was not normalized as absent'
+  printf '{"limit":"existing_users"}\n' >"$body"
+  if source_state_allowed interaction_limits 200 no_content "$body" 2>/dev/null; then
+    die 'preflight accepted a non-empty interaction limit'
   fi
 
   source_dir=$(mktemp -d)
@@ -357,14 +432,35 @@ self_test() {
   printf '404\n' >"$source_dir/automated_security_fixes.status"
   apply_one automated_security_fixes cgraf78/dotfiles-nvim "$source_dir" \
     PUT_OR_DELETE 'repos/{repo}/automated-security-fixes'
+  printf '{"enabled":true,"paused":false}\n' \
+    >"$source_dir/automated_security_fixes.body"
+  printf '200\n' >"$source_dir/automated_security_fixes.status"
+  apply_one automated_security_fixes cgraf78/dotfiles-nvim "$source_dir" \
+    PUT_OR_DELETE 'repos/{repo}/automated-security-fixes'
+  printf '{"enabled":false,"paused":false}\n' \
+    >"$source_dir/automated_security_fixes.body"
+  apply_one automated_security_fixes cgraf78/dotfiles-nvim "$source_dir" \
+    PUT_OR_DELETE 'repos/{repo}/automated-security-fixes'
   : >"$source_dir/interaction_limits.body"
   printf '204\n' >"$source_dir/interaction_limits.status"
+  apply_one interaction_limits cgraf78/dotfiles-nvim "$source_dir" \
+    PUT_OR_DELETE 'repos/{repo}/interaction-limits'
+  printf '{}\n' >"$source_dir/code_security_configuration.body"
+  printf '200\n' >"$source_dir/code_security_configuration.status"
+  apply_one code_security_configuration cgraf78/dotfiles-nvim "$source_dir" \
+    DELETE_IF_ATTACHED 'repos/{repo}/code-security-configuration'
+  printf '{}\n' >"$source_dir/interaction_limits.body"
+  printf '200\n' >"$source_dir/interaction_limits.status"
   apply_one interaction_limits cgraf78/dotfiles-nvim "$source_dir" \
     PUT_OR_DELETE 'repos/{repo}/interaction-limits'
   expected=$(
     cat <<'EOF'
 api --method PUT repos/cgraf78/dotfiles-nvim/automated-security-fixes
 api --method DELETE repos/cgraf78/dotfiles-nvim/automated-security-fixes
+api --method PUT repos/cgraf78/dotfiles-nvim/automated-security-fixes
+api --method DELETE repos/cgraf78/dotfiles-nvim/automated-security-fixes
+api --method DELETE repos/cgraf78/dotfiles-nvim/interaction-limits
+api --method DELETE repos/cgraf78/dotfiles-nvim/code-security-configuration
 api --method DELETE repos/cgraf78/dotfiles-nvim/interaction-limits
 EOF
   )
