@@ -9,6 +9,22 @@ nvim_test_static() {
   nvim_test_assert 'Neovim init exists' test -f "$config/init.lua"
   nvim_test_assert 'editor plugin spec exists' test -f "$config/lua/plugins/editor.lua"
   nvim_test_assert 'workspace plugin spec exists' test -f "$config/lua/plugins/workspace.lua"
+  nvim_test_assert 'LazyVim extras extension exists' \
+    test -f "$config/lua/dotfiles/lazyvim_extras/init.lua"
+  nvim_test_assert 'plugin override extension exists' \
+    test -f "$config/lua/dotfiles/plugin_overrides/init.lua"
+  nvim_test_assert 'final policy extension exists' \
+    test -f "$config/lua/dotfiles/final_policy/init.lua"
+  nvim_test_assert 'Lazy imports have an explicit capability order' awk '
+    /import = "lazyvim.plugins"/ { core = NR }
+    /import = "dotfiles.lazyvim_extras"/ { extras = NR }
+    /import = "plugins"/ { plugins = NR }
+    /import = "dotfiles.plugin_overrides"/ { overrides = NR }
+    /import = "dotfiles.final_policy"/ { policy = NR }
+    END { exit !(core && extras && plugins && overrides && policy &&
+      core < extras && extras < plugins && plugins < overrides &&
+      overrides < policy) }
+  ' "$config/lua/config/lazy.lua"
   nvim_test_assert 'development coding spec is absent' test ! -e "$config/lua/plugins/coding.lua"
   nvim_test_assert 'development formatting spec is absent' test ! -e "$config/lua/plugins/formatting.lua"
   nvim_test_assert 'development linting spec is absent' test ! -e "$config/lua/plugins/linting.lua"

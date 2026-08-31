@@ -4,13 +4,14 @@ This directory owns the editor-profile Neovim configuration. The editor
 profile covers navigation, sessions, buffers, file search, syntax, colors, and
 basic Git indicators.
 
-`init.lua` loads LazyVim and imports every plugin spec under `lua/plugins/`.
-That directory is the stable additive extension point used by higher overlays.
-The `dotfiles-dev` overlay contributes language services, debugging, AI
-assistance, formatting, linting, and advanced Git workflows without replacing
-this editor configuration. `lua/plugins/editor.lua` explicitly disables the
-development services imported by LazyVim core; the dev overlay re-enables them
-alongside its language extras.
+`init.lua` loads plugin policy in five explicit phases: LazyVim core,
+`lua/dotfiles/lazyvim_extras/`, ordinary `lua/plugins/`, capability overrides
+under `lua/dotfiles/plugin_overrides/`, and final constraints under
+`lua/dotfiles/final_policy/`. The empty editor-owned extension modules make
+that ordering stable even when higher overlays are absent. The `dotfiles-dev`
+overlay contributes language services, debugging, AI assistance, formatting,
+linting, and advanced Git workflows through those extension points without
+replacing this editor configuration.
 
 The editor-owned `nvim-workspace` options use only generic repository markers
 and the tracked dotfiles HOME. Sley discovery and Lazygit routing are additive

@@ -207,7 +207,21 @@ eval "$saved_run_nvim_startup"
 _assert_eq "startup preparation: does not retry a child status 124" "124" "$startup_rc"
 _assert_file_content "startup preparation: child status 124 runs once" "120" \
   "$startup_mock_log"
-if [[ -e $HOME/.config/nvim/lua/plugins/zz-dev-extras.lua ]]; then
+
+import_order_result=$(_tmpfile)
+import_order_status=0
+NVIM_TEST_IMPORT_ORDER_FILE=$import_order_result \
+  "$NVIM_TEST_BIN" --headless -i NONE \
+  --cmd 'lua vim.g.disable_session_restore = true' \
+  -u "$HOME/.config/nvim/init.lua" \
+  -c 'lua local modules=require("lazy.core.config").spec.modules; local lazyvim_index, extras_index, plugins_index, overrides_index, policy_index, valid; valid=true; for index, module in ipairs(modules) do if module == "lazyvim.plugins" then lazyvim_index=index elseif module == "dotfiles.lazyvim_extras" then extras_index=index elseif module == "plugins" then plugins_index=index elseif module == "dotfiles.plugin_overrides" then overrides_index=index elseif module == "dotfiles.final_policy" then policy_index=index end end; valid=lazyvim_index == 1 and extras_index and plugins_index and overrides_index and policy_index and extras_index < plugins_index and plugins_index < overrides_index and overrides_index < policy_index; for index, module in ipairs(modules) do if module:match("^lazyvim%.plugins%.extras%.") and (not plugins_index or index > plugins_index) then valid=false end end; vim.fn.writefile({valid and "lazy-import-order-ok" or table.concat(modules, ",")}, vim.env.NVIM_TEST_IMPORT_ORDER_FILE)' \
+  -c 'qa!' >/dev/null 2>&1 || import_order_status=$?
+_assert_eq "startup: LazyVim import-order probe exits successfully" \
+  0 "$import_order_status"
+_assert_file_content "startup: LazyVim extras load before custom plugins" \
+  "lazy-import-order-ok" "$import_order_result"
+
+if [[ -e $HOME/.config/nvim/lua/dotfiles/lazyvim_extras/dev.lua ]]; then
   _pass "editor-only startup smoke is covered by the editor fixture"
 else
   _assert_nvim_startup_budget "startup: .bashrc opens and exits within budget" "$HOME/.bashrc"

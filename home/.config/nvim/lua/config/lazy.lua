@@ -19,8 +19,14 @@ require("lazy").setup({
   spec = {
     -- add LazyVim and import its plugins
     { "LazyVim/LazyVim", import = "lazyvim.plugins" },
+    -- Let active capabilities add LazyVim extras before custom plugin specs.
+    { import = "dotfiles.lazyvim_extras" },
     -- import/override with your plugins
     { import = "plugins" },
+    -- Let capabilities apply final overrides without relying on filename sort.
+    { import = "dotfiles.plugin_overrides" },
+    -- Apply policy constraints after capability overrides have been combined.
+    { import = "dotfiles.final_policy" },
   },
   defaults = {
     -- By default, only LazyVim plugins will be lazy-loaded. Your custom plugins will load during startup.
