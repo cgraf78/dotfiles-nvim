@@ -66,7 +66,7 @@ printf 'route-host.invalid\n'
 EOF
 chmod +x "$rg_bin/termnav"
 rg_output=$(cd "$rg_tmp" && RIPGREP_LINK_HOST_LOG="$rg_host_log" \
-  RIPGREP_CONFIG_PATH="$config" PATH="$HOME/.local/bin:$rg_bin:$PATH" \
+  RIPGREP_CONFIG_PATH="$config" PATH="$rg_bin:$HOME/.local/bin:$PATH" \
   rg --color=always --with-filename -n needle src/main.lua)
 _assert_eq 'ripgrep host adapter delegates to the native Termnav command' \
   'link-host' "$(<"$rg_host_log")"
