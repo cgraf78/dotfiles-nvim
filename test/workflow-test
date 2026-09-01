@@ -82,7 +82,7 @@ single_sha() {
   [[ $value == "$expected" ]] || fail "$file contains an unexpected commit SHA"
 }
 single_sha .github/cgraf78-actions.lock de3f6086e36a77eec8ee62f2c9871266e4b5c05c
-single_sha .github/dot.lock f35481ef8b2a254e10b90df01670f873eb293cbe
+single_sha .github/dot.lock 6e0efca35aa3b09e7f61ed0d79866f5a490bb852
 
 expected_source=$'version=1\nrepository=cgraf78/dotfiles\ncommit=2ad180e90571ebe4396cd70aa73f3f9ed32938ec\nlicense_path=.github/LICENSE'
 [[ $(<.github/dotfiles-source.lock) == "$expected_source" ]] || fail 'source lock is not canonical'
