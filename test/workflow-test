@@ -81,8 +81,8 @@ single_sha() {
   [[ $value =~ ^[0-9a-f]{40}$ ]] || fail "$file does not contain a full lowercase commit SHA"
   [[ $value == "$expected" ]] || fail "$file contains an unexpected commit SHA"
 }
-single_sha .github/cgraf78-actions.lock de3f6086e36a77eec8ee62f2c9871266e4b5c05c
-single_sha .github/dot.lock 6e0efca35aa3b09e7f61ed0d79866f5a490bb852
+single_sha .github/cgraf78-actions.lock dc7be3dcf6da264083f229d78818c2ad087a3d34
+single_sha .github/dot.lock a96eeba1564925e0e0857492e0e3feeaf0d14964
 
 expected_source=$'version=1\nrepository=cgraf78/dotfiles\ncommit=faadad51a469a9651f6357850da852c3818390f5\nlicense_path=.github/LICENSE'
 [[ $(<.github/dotfiles-source.lock) == "$expected_source" ]] || fail 'source lock is not canonical'
