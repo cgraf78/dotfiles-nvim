@@ -177,9 +177,18 @@ for retired in termnav-switch-tab wezterm-switch-tab wezterm-move-tab \
     "$retired" "$fragment_content"
 done
 
-pane_filter=$(printf '%s\n' "$pane_left" |
-  sed -n "s/.*awk -v mouse='#{mouse_any_flag}' '\\(.*\\)'\" \"send-keys C-h\".*/\\1/p")
-_assert_contains 'tmux editor runtime preserves the process fallback after parsing' \
+pane_filter_line=$(printf '%s\n' "$fragment_content" |
+  grep '^is_pane_navigation=' || true)
+# tmux 3.2 serializes nested commands differently from newer releases. Test
+# the source-owned predicate directly instead of parsing version-specific
+# list-keys display text; the runtime assertions above still prove that tmux
+# accepts and expands the binding.
+pane_filter_prefix=${pane_filter_line%%\| awk*}
+pane_filter_prefix="${pane_filter_prefix}| awk -v mouse='#{mouse_any_flag}' '"
+pane_filter=${pane_filter_line#"$pane_filter_prefix"}
+pane_filter=${pane_filter%\'\"}
+pane_filter=${pane_filter//\\\$/\$}
+_assert_contains 'tmux editor source preserves the process fallback predicate' \
   'END { exit !found }' "$pane_filter"
 # shellcheck disable=SC2016 # Assert that the generated AWK keeps no escaped field token.
 _assert_not_contains 'tmux editor runtime fallback has no escaped AWK fields' \
