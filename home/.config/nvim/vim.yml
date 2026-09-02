@@ -1,0 +1,9 @@
+globals:
+  vim:
+    any: true
+  LazyVim:
+    any: true
+  Snacks:
+    any: true
+  in_large_repo:
+    any: true

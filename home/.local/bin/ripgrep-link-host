@@ -1,0 +1,5 @@
+#!/usr/bin/env sh
+# ripgrep's --hostname-bin accepts one executable name and always invokes it
+# without arguments. Keep that interface quirk beside the ripgrep config that
+# needs it; Termnav itself remains one conventional, explicitly-commanded CLI.
+exec termnav link-host

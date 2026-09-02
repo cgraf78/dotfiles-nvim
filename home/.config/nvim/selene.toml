@@ -1,0 +1,7 @@
+std = "vim+lua51"
+
+[rules]
+unused_variable = "allow"
+bad_string_escape = "allow"
+mixed_table = "allow"
+global_usage = "allow"

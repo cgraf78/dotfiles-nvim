@@ -1,0 +1,10 @@
+home/.local/lib/dotfiles/tests/link-routing-test
+home/.local/lib/dotfiles/tests/lua-test
+home/.local/lib/dotfiles/tests/nvim-doctor-test
+home/.local/lib/dotfiles/tests/nvim-launchers-test
+home/.local/lib/dotfiles/tests/nvim-merges-test
+home/.local/lib/dotfiles/tests/nvim-shdeps-hooks-test
+home/.local/lib/dotfiles/tests/nvim-static-test
+home/.local/lib/dotfiles/tests/nvim-test
+home/.local/lib/dotfiles/tests/nvim-update-test
+home/.local/lib/dotfiles/tests/tmux-editor-test

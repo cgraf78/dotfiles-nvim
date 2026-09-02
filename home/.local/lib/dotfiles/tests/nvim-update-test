@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -u
+. "${BASH_SOURCE[0]%/*}/nvim/helpers.sh"
+. "${BASH_SOURCE[0]%/*}/nvim/load-merge-api.sh"
+api_home=$(_tmpdir)/api-home
+NVIM_TEST_PUBLIC_HOOK_API_LOG=$(_tmpdir)/public-hook-api.log
+export NVIM_TEST_PUBLIC_HOOK_API_LOG
+mkdir -p "$api_home/.local/lib/dotfiles/merge-hooks.d/lib"
+cp "$HOME/.local/lib/dotfiles/merge-hooks.d/nvim.sh" \
+  "$api_home/.local/lib/dotfiles/merge-hooks.d/nvim.sh"
+cp "$HOME/.local/lib/dotfiles/merge-hooks.d/lib/compat.sh" \
+  "$api_home/.local/lib/dotfiles/merge-hooks.d/lib/compat.sh"
+for support in windows.sh agent-playbooks.sh shdeps-assets.sh; do
+  if [[ -f $HOME/.local/lib/dotfiles/merge-hooks.d/lib/$support ]]; then
+    cp "$HOME/.local/lib/dotfiles/merge-hooks.d/lib/$support" \
+      "$api_home/.local/lib/dotfiles/merge-hooks.d/lib/$support"
+  fi
+done
+nvim_test_load_merge_api "$api_home"
+if declare -F merge >/dev/null; then
+  nvim_test_ok
+else
+  nvim_test_fail 'update hook exposes merge entry point'
+fi
+_assert_contains 'update hook loads through the public hook API' \
+  $'source\tmerge-hooks.d/nvim.sh' "$(cat "$NVIM_TEST_PUBLIC_HOOK_API_LOG")"
+nvim_test_finish

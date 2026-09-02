@@ -18,7 +18,10 @@ capability_fixture_create() {
   cat >"$config_dir/config" <<'EOF'
 version=1
 extension_api=1
-extensions_dir=$HOME/.local/lib/dotfiles
+# sync=none sources are intentionally not trusted as executable extension
+# providers. Keep update-time discovery on an empty inherited root; test/run
+# invokes this checkout's suites explicitly through DOT_TEST_TESTS_DIR.
+extensions_dir=$HOME/.config/dot/extensions
 dependency_provider=none
 EOF
   {
@@ -37,6 +40,7 @@ capability_fixture_self_test() {
   [[ ! -e $tmp/home/.git && ! -e $tmp/home/.dotfiles ]]
   [[ $(<"$tmp/home/.config/dot/overlays.d/20-nvim.conf") == $'sync=none\npath='"$overlay" ]]
   [[ $(<"$tmp/home/.config/dot/config") == *'dependency_provider=none'* ]]
+  [[ $(<"$tmp/home/.config/dot/config") == *"extensions_dir=\$HOME/.config/dot/extensions"* ]]
 }
 
 if [[ ${BASH_SOURCE[0]} == "$0" ]]; then

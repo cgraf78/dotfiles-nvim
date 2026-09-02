@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -u
+. "${BASH_SOURCE[0]%/*}/nvim/helpers.sh"
+hook=$HOME/.config/shdeps/hooks.d/neovim/neovim.sh
+nvim_test_contains 'Neovim install hook retains Android package support' 'shdeps_platform_match android' "$hook"
+nvim_test_not_contains 'editor Android smoke excludes development toolchains' 'clangd|gopls|rustfmt|typescript|copilot' "$HOME/.config/shdeps/20-nvim.conf"
+nvim_test_finish

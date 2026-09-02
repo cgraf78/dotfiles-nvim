@@ -1,0 +1,7 @@
+--smart-case
+--hidden
+--glob=!.git
+--max-columns=200
+--max-columns-preview
+--hostname-bin=ripgrep-link-host
+--hyperlink-format=file://{host}{path}:{line}:{column}

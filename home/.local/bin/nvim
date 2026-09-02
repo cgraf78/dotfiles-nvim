@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Reuse a suitable Neovim tmux pane, or launch the managed editor.
+
+set -euo pipefail
+
+# The launcher is installed only as part of a converged dot update. Termnav owns
+# the reusable pane-selection policy, while dotfiles owns this small wiring
+# layer; an unavailable provider means the installation needs repair.
+# shellcheck source=../lib/dotfiles/shdeps-assets.sh disable=SC1091
+. "${BASH_SOURCE[0]%/*}/../lib/dotfiles/shdeps-assets.sh"
+if ! dot_shdeps_dep_source \
+  cgraf78/termnav \
+  lib/termnav/nvim-open/launcher.sh; then
+  printf 'nvim launcher: Termnav unavailable; run dot update\n' >&2
+  exit 127
+fi
+
+if termnav_nvim_try_reuse "$@"; then
+  exit 0
+fi
+
+# Shdeps keeps the real editor behind this tracked public launcher. Treat the
+# fixed target as the contract instead of searching PATH and risking another
+# launcher copy or silently accepting an incomplete update.
+_nvim_real="${HOME:?}/.local/share/neovim/neovim/bin/nvim"
+if [[ ! -x "$_nvim_real" || -d "$_nvim_real" ]]; then
+  printf 'nvim launcher: real nvim not found at %s; run dot update\n' \
+    "$_nvim_real" >&2
+  exit 127
+fi
+
+exec "$_nvim_real" "$@"

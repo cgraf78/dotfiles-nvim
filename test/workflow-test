@@ -3,7 +3,10 @@ set -euo pipefail
 
 repo_root=$(cd "${BASH_SOURCE[0]%/*}/.." && pwd -P)
 cd "$repo_root"
-repo_name=${repo_root##*/}
+repo_remote=$(git config --get remote.origin.url)
+repo_name=${GITHUB_REPOSITORY:-${repo_remote##*/}}
+repo_name=${repo_name##*/}
+repo_name=${repo_name%.git}
 
 fail() {
   printf 'workflow-test: %s\n' "$*" >&2
@@ -40,7 +43,7 @@ remote_predicate() {
   remote_tmp=$(mktemp -d)
   trap 'rm -rf -- "$remote_tmp"' RETURN
   gh api --method GET repos/cgraf78/dotfiles/contents/.github/LICENSE \
-    -f ref=703e1aeea7286fccec56f65fa4314b8d57b46469 --jq .content |
+    -f ref=21626d196c0dfca242f6318606ec4b9bbca18371 --jq .content |
     base64 --decode >"$remote_tmp/source-LICENSE"
   gh api --method GET "repos/cgraf78/$repo_name/contents/LICENSE" --jq .content |
     base64 --decode >"$remote_tmp/target-LICENSE"
@@ -64,11 +67,12 @@ required_files=(
   .github/dot-test-suites.txt .github/dotfiles-source.lock
   .github/repository-settings-endpoints.txt .github/shellcheck-files.txt
   .github/workflows/retry-infrastructure.yml .github/workflows/test.yml
-  .gitignore LICENSE README.md home/.gitkeep test/run test/workflow-test
+  .gitignore LICENSE README.md test/run test/workflow-test
   test/lib/capability-fixture.sh test/lib/repository-settings.sh
   test/lib/wait-github-state.sh
 )
 for path in "${required_files[@]}"; do [[ -f $path ]] || fail "missing required file: $path"; done
+[[ -d home && ! -e home/.gitkeep ]] || fail 'final capability payload must replace home/.gitkeep'
 
 single_sha() {
   local file=$1 expected=$2 value
@@ -77,10 +81,10 @@ single_sha() {
   [[ $value =~ ^[0-9a-f]{40}$ ]] || fail "$file does not contain a full lowercase commit SHA"
   [[ $value == "$expected" ]] || fail "$file contains an unexpected commit SHA"
 }
-single_sha .github/cgraf78-actions.lock de3f6086e36a77eec8ee62f2c9871266e4b5c05c
-single_sha .github/dot.lock dfe976f4962389ee2c2bfe107a8bcfc34660469d
+single_sha .github/cgraf78-actions.lock dc7be3dcf6da264083f229d78818c2ad087a3d34
+single_sha .github/dot.lock a96eeba1564925e0e0857492e0e3feeaf0d14964
 
-expected_source=$'version=1\nrepository=cgraf78/dotfiles\ncommit=703e1aeea7286fccec56f65fa4314b8d57b46469\nlicense_path=.github/LICENSE'
+expected_source=$'version=1\nrepository=cgraf78/dotfiles\ncommit=21626d196c0dfca242f6318606ec4b9bbca18371\nlicense_path=.github/LICENSE'
 [[ $(<.github/dotfiles-source.lock) == "$expected_source" ]] || fail 'source lock is not canonical'
 if LC_ALL=C grep -q $'\r' .github/dotfiles-source.lock; then fail 'source lock contains CRLF'; fi
 
@@ -92,21 +96,21 @@ fi
 [[ $license_hash == bfaed6d8fb29d7208c1266afa313681591d6ca05ec2f7e005cebe3d7a7b43579 ]] || fail 'LICENSE bytes differ from the frozen MIT license'
 [[ $(wc -c <LICENSE | tr -d '[:space:]') == 1067 ]] || fail 'LICENSE size differs from the frozen MIT license'
 if [[ -n ${DOTFILES_SOURCE_REPO:-} ]]; then
-  git -C "$DOTFILES_SOURCE_REPO" cat-file -e '703e1aeea7286fccec56f65fa4314b8d57b46469^{commit}'
-  cmp LICENSE <(git -C "$DOTFILES_SOURCE_REPO" show 703e1aeea7286fccec56f65fa4314b8d57b46469:.github/LICENSE)
-  cmp .github/dependabot.yml <(git -C "$DOTFILES_SOURCE_REPO" show 703e1aeea7286fccec56f65fa4314b8d57b46469:.github/dependabot.yml)
-  cmp .github/workflows/retry-infrastructure.yml <(git -C "$DOTFILES_SOURCE_REPO" show 703e1aeea7286fccec56f65fa4314b8d57b46469:.github/workflows/retry-infrastructure.yml)
+  git -C "$DOTFILES_SOURCE_REPO" cat-file -e '21626d196c0dfca242f6318606ec4b9bbca18371^{commit}'
+  cmp LICENSE <(git -C "$DOTFILES_SOURCE_REPO" show 21626d196c0dfca242f6318606ec4b9bbca18371:.github/LICENSE)
+  cmp .github/dependabot.yml <(git -C "$DOTFILES_SOURCE_REPO" show 21626d196c0dfca242f6318606ec4b9bbca18371:.github/dependabot.yml)
+  cmp .github/workflows/retry-infrastructure.yml <(git -C "$DOTFILES_SOURCE_REPO" show 21626d196c0dfca242f6318606ec4b9bbca18371:.github/workflows/retry-infrastructure.yml)
 fi
 [[ $(<.gitignore) == '.worktrees/' ]] || fail '.gitignore must contain only .worktrees/'
 manifest_hash=$(sha256sum .github/repository-settings-endpoints.txt 2>/dev/null | awk '{print $1}' || shasum -a 256 .github/repository-settings-endpoints.txt | awk '{print $1}')
-[[ $manifest_hash == 33b811658ba29f30dcebc77f1a10b4d37bac199c358831e1fa89af2bd8f18ac4 ]] || fail 'repository settings endpoint contract drifted'
+[[ $manifest_hash == 1014be04ef3f99d20570369cdc0831d4f75571882d2d4797b7d817cd43ff21c7 ]] || fail 'repository settings endpoint contract drifted'
 
 workflow=.github/workflows/test.yml
 grep -Fx 'name: Tests' "$workflow" >/dev/null || fail 'test workflow name drifted'
 grep -Fx "    - cron: \"$expected_cron\"" "$workflow" >/dev/null || fail 'nightly schedule drifted'
 grep -Fx '      setup: none' "$workflow" >/dev/null || fail 'capability CI must use setup: none'
 grep -Fx '      matrix-set: full' "$workflow" >/dev/null || fail 'capability CI must use the full matrix'
-grep -Fx '      profiles: base,jq,python' "$workflow" >/dev/null || fail 'bootstrap prerequisite profile drifted'
+grep -Fx '      profiles: base,jq,python,lua,neovim,tmux,ripgrep,fd,procps' "$workflow" >/dev/null || fail 'capability prerequisite profile drifted'
 grep -Fx '    name: cgraf78/actions sync' "$workflow" >/dev/null || fail 'actions-sync job is missing'
 grep -Fx '          persist-credentials: false' "$workflow" >/dev/null || fail 'checkout credentials must not persist'
 if grep -F 'setup: dotfiles' "$workflow" >/dev/null; then fail 'overlay CI must not bootstrap the base dotfiles repository'; fi
@@ -126,7 +130,36 @@ grep -F 'wait_github_state 120 3' test/workflow-test >/dev/null || fail 'remote 
 grep -F "infra-retry@$actions_sha" .github/workflows/retry-infrastructure.yml >/dev/null || fail 'retry action ref is missing'
 grep -F 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' "$workflow" >/dev/null || fail 'checkout pin drifted'
 
-expected_shell_files=(test/run test/workflow-test test/lib/capability-fixture.sh test/lib/repository-settings.sh test/lib/wait-github-state.sh)
+expected_shell_files=(
+  test/run test/workflow-test test/lib/capability-fixture.sh
+  test/lib/repository-settings.sh test/lib/wait-github-state.sh
+  home/.config/shdeps/hooks.d/neovim/neovim.sh
+  home/.config/shell/env.d/60-editor.sh
+  home/.config/shell/env.d/80-editor-defaults.sh
+  home/.config/shell/interactive.d/60-editor-aliases.sh
+  home/.local/bin/nvim
+  home/.local/bin/ripgrep-link-host
+  home/.local/lib/dotfiles/doctor.d/70-nvim.sh
+  home/.local/lib/dotfiles/doctor.d/lib/nvim.sh
+  home/.local/lib/dotfiles/merge-hooks.d/nvim.sh
+  home/.local/lib/dotfiles/tests/android-editor-ci-smoke
+  home/.local/lib/dotfiles/tests/link-routing-test
+  home/.local/lib/dotfiles/tests/lua-test
+  home/.local/lib/dotfiles/tests/nvim-doctor-test
+  home/.local/lib/dotfiles/tests/nvim-launchers-test
+  home/.local/lib/dotfiles/tests/nvim-merges-test
+  home/.local/lib/dotfiles/tests/nvim-shdeps-hooks-test
+  home/.local/lib/dotfiles/tests/nvim-static-test
+  home/.local/lib/dotfiles/tests/nvim-test
+  home/.local/lib/dotfiles/tests/nvim-update-test
+  home/.local/lib/dotfiles/tests/tmux-editor-test
+  home/.local/lib/dotfiles/tests/nvim/doctor.sh
+  home/.local/lib/dotfiles/tests/nvim/helpers.sh
+  home/.local/lib/dotfiles/tests/nvim/launchers.sh
+  home/.local/lib/dotfiles/tests/nvim/load-merge-api.sh
+  home/.local/lib/dotfiles/tests/nvim/merges.sh
+  home/.local/lib/dotfiles/tests/nvim/static.sh
+)
 declare -a actual_shell_files=()
 while IFS=$'\t' read -r type path extra; do
   case $type in '' | \#*) continue ;; esac
@@ -143,6 +176,14 @@ test/lib/repository-settings.sh --self-test
 test/lib/wait-github-state.sh --self-test
 test/lib/capability-fixture.sh --self-test
 test/run --inventory-self-test
+grep -F 'scope=source-harness category=nvim-executable' test/run >/dev/null ||
+  fail 'source/harness footprint label is missing'
+grep -F 'scope=installed-editor category=nvim-plugin-graph' test/run >/dev/null ||
+  fail 'installed editor plugin graph measurement is missing'
+grep -F 'scope=installed-editor category=incremental-total' test/run >/dev/null ||
+  fail 'installed editor total measurement is missing'
+grep -F 'installed editor plugin graph is empty' test/run >/dev/null ||
+  fail 'installed editor plugin graph measurement is not enforced'
 
 descriptor_path=".config/dot/overlays.d/$descriptor"
 case $descriptor_path in
@@ -151,7 +192,7 @@ case $descriptor_path in
 esac
 
 suite_count=$(awk 'NF && $1 !~ /^#/ { count++ } END { print count+0 }' .github/dot-test-suites.txt)
-case ${DOTFILES_CAPABILITY_PHASE:-bootstrap} in
+case ${DOTFILES_CAPABILITY_PHASE:-final} in
   bootstrap) ;;
   final) ((suite_count > 0)) || fail 'final mode requires a non-empty suite inventory' ;;
   *) fail 'DOTFILES_CAPABILITY_PHASE must be bootstrap or final' ;;

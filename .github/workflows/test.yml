@@ -11,13 +11,16 @@ on:
 permissions:
   contents: read
 
+env:
+  DOTFILES_CAPABILITY_PHASE: final
+
 jobs:
   shell:
-    uses: cgraf78/actions/.github/workflows/shell-ci.yml@de3f6086e36a77eec8ee62f2c9871266e4b5c05c
+    uses: cgraf78/actions/.github/workflows/shell-ci.yml@dc7be3dcf6da264083f229d78818c2ad087a3d34
     with:
       setup: none
       matrix-set: full
-      profiles: base,jq,python
+      profiles: base,jq,python,lua,neovim,tmux,ripgrep,fd,procps
       shellcheck-exclude-codes: SC1091
       shellcheck-inventory-path: .github/shellcheck-files.txt
       test-command: test/run
@@ -31,7 +34,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: cgraf78/actions/.github/actions/verify-consumer-sync@de3f6086e36a77eec8ee62f2c9871266e4b5c05c
+      - uses: cgraf78/actions/.github/actions/verify-consumer-sync@dc7be3dcf6da264083f229d78818c2ad087a3d34
 
       - name: Verify public repository and license
         env:

@@ -88,20 +88,40 @@ mkdir "$controlled_bin"
 system_roots=()
 [[ -z ${PREFIX:-} ]] || system_roots+=("$PREFIX/bin")
 system_roots+=(/opt/homebrew/bin /usr/local/bin /usr/bin /bin)
-required_commands=(awk bash basename cat chmod cmp cut date dirname env find git grep head id jq ln mkdir mkfifo mktemp mv od ps pwd python3 readlink rm rmdir sed sh sleep sort stat tail tee tr uname wc xargs)
+required_commands=(awk bash basename cat chmod cp cut date dirname env fd find git grep head id jq ln mkdir mkfifo mktemp mv nvim od ps pwd python3 readlink rg rm rmdir sed sh sleep sort stat tail tee tmux touch tr uname wc xargs)
 for command_name in "${required_commands[@]}"; do
   command_path=
+  command_candidates=("$command_name")
+  [[ $command_name != fd ]] || command_candidates+=(fdfind)
+  if [[ $command_name == nvim && -n ${CAPABILITY_TEST_NVIM:-} ]]; then
+    [[ $CAPABILITY_TEST_NVIM == /* && -x $CAPABILITY_TEST_NVIM && ! -d $CAPABILITY_TEST_NVIM ]] || {
+      echo 'CAPABILITY_TEST_NVIM must name an absolute executable' >&2
+      exit 1
+    }
+    command_path=$CAPABILITY_TEST_NVIM
+  fi
   for command_root in "${system_roots[@]}"; do
-    if [[ -x $command_root/$command_name && ! -d $command_root/$command_name ]]; then
-      command_path=$command_root/$command_name
-      break
-    fi
+    [[ -z $command_path ]] || break
+    for candidate_name in "${command_candidates[@]}"; do
+      if [[ -x $command_root/$candidate_name && ! -d $command_root/$candidate_name ]]; then
+        command_path=$command_root/$candidate_name
+        break
+      fi
+    done
   done
   [[ -n $command_path ]] || {
     echo "missing required fixture command: $command_name" >&2
     exit 1
   }
   ln -s "$command_path" "$controlled_bin/$command_name"
+done
+# The full editor suite uses ldd only to distinguish glibc from unsupported
+# Linux libc variants. It is deliberately optional on macOS and Android.
+for command_root in "${system_roots[@]}"; do
+  if [[ -x $command_root/ldd && ! -d $command_root/ldd ]]; then
+    ln -s "$command_root/ldd" "$controlled_bin/ldd"
+    break
+  fi
 done
 cat >"$controlled_bin/hostname" <<'EOF'
 #!/bin/sh
@@ -128,6 +148,54 @@ unset JEMALLOC_CONF
 mkdir -p "$XDG_STATE_HOME" "$XDG_CACHE_HOME" "$XDG_RUNTIME_DIR"
 mkdir -p "$HOME/.local/lib/dotfiles"
 chmod 700 "$HOME/.local/lib/dotfiles"
+mkdir -p "$HOME/.config/dot/extensions"
+chmod 700 "$HOME/.config/dot/extensions"
+
+# Capability tests run without a base checkout, so provide only the inherited
+# interfaces that editor-owned adapters call. Their full integration remains a
+# top-level dotfiles responsibility.
+cat >"$HOME/.local/lib/dotfiles/shdeps-assets.sh" <<'EOF'
+dot_shdeps_dep_source() {
+  [[ $# == 2 ]] || return 2
+  [[ ${DOT_SHDEPS_TEST_MISSING:-0} != 1 ]] || return 1
+  case "$1:$2" in
+    cgraf78/termnav:lib/termnav/nvim-open/launcher.sh)
+      [[ -r ${NVIM_LAUNCHER_PROVIDER:-} ]] || return 1
+      # shellcheck source=/dev/null
+      . "$NVIM_LAUNCHER_PROVIDER"
+      ;;
+    *) return 1 ;;
+  esac
+}
+EOF
+mkdir -p "$HOME/.local/lib/dotfiles/doctor.d/lib"
+cat >"$HOME/.local/lib/dotfiles/doctor.d/lib/compat.sh" <<'EOF'
+# Minimal inherited doctor reporter interface for capability tests.
+_dr_section() { dot_doctor_section "$@"; }
+_dr_ok() { dot_doctor_ok "$@"; }
+_dr_warn() { dot_doctor_warn "$@"; }
+_dr_fail() { dot_doctor_fail "$@"; }
+_dr_skip() { dot_doctor_skip "$@"; }
+EOF
+mkdir -p "$HOME/.local/lib/dotfiles/merge-hooks.d/lib"
+cat >"$HOME/.local/lib/dotfiles/merge-hooks.d/lib/compat.sh" <<'EOF'
+# Minimal inherited merge-hook interface for capability tests.
+_dot_tool_present() { dot_tool_present "$@"; }
+EOF
+export NVIM_TEST_BIN=$controlled_bin/nvim
+export NVIM_TEST_GRAPH_MARKER=$tmp/nvim-installed-graph-tested
+export NVIM_TEST_GRAPH_INVENTORY=$tmp/nvim-installed-graph.tsv
+export NVIM_TEST_STATE_HOME=$XDG_STATE_HOME
+export NVIM_TEST_CACHE_HOME=$XDG_CACHE_HOME
+if [[ -n ${CAPABILITY_TEST_NVIM_DATA_HOME:-} ]]; then
+  [[ $CAPABILITY_TEST_NVIM_DATA_HOME == /* && -d $CAPABILITY_TEST_NVIM_DATA_HOME ]] || {
+    echo 'CAPABILITY_TEST_NVIM_DATA_HOME must name an absolute directory' >&2
+    exit 1
+  }
+  export NVIM_TEST_DATA_HOME=$CAPABILITY_TEST_NVIM_DATA_HOME
+else
+  export NVIM_TEST_DATA_HOME=$XDG_DATA_HOME
+fi
 
 if git -C "$HOME" rev-parse --show-toplevel >/dev/null 2>&1; then
   echo 'capability fixture unexpectedly contains a base Git repository' >&2
@@ -147,12 +215,35 @@ linked_relative=${linked_source#"$repo_root/home"/}
   echo 'capability descriptor was not converged through standalone Dot' >&2
   exit 1
 }
+# The single-quoted script intentionally expands $1 in the child shell.
+# shellcheck disable=SC2016
+installed_nvim_root=$(
+  env -u DOT_PROFILE_FIXTURE \
+    DOT_TEST_TESTS_DIR="$HOME/.local/lib/dotfiles/tests" \
+    bash -c '. "$1"; _nvim_repo_root' _ \
+    "$HOME/.local/lib/dotfiles/tests/nvim/helpers.sh"
+)
+[[ $installed_nvim_root == "$repo_root" ]] || {
+  echo "installed Nvim helper resolved the wrong owner root: $installed_nvim_root" >&2
+  exit 1
+}
+
+# This owner-specific CI smoke retains the historical non-`*-test` name, so it
+# runs explicitly rather than entering Dot's component-suite namespace.
+cat >"$tmp/direct-reporter" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ ${1:-} == complete && ${3:-1} == 0 ]]
+EOF
+chmod +x "$tmp/direct-reporter"
+DOT_TEST_REPORTER=$tmp/direct-reporter \
+  "$HOME/.local/lib/dotfiles/tests/android-editor-ci-smoke"
 
 suite_root=$repo_root/home/.local/lib/dotfiles/tests
 validate_suite_inventory "$suite_root" .github/dot-test-suites.txt "$repo_root" >"$tmp/suites"
 mapfile -t suites <"$tmp/suites"
 
-if [[ ${DOTFILES_CAPABILITY_PHASE:-bootstrap} == final && ${#suites[@]} -eq 0 ]]; then
+if [[ ${DOTFILES_CAPABILITY_PHASE:-final} == final && ${#suites[@]} -eq 0 ]]; then
   echo 'final capability repository requires at least one focused suite' >&2
   exit 1
 fi
@@ -161,19 +252,89 @@ if ((${#suites[@]} > 0)); then
     dot test -s "${suites[@]}"
 fi
 
+footprint_bytes() {
+  python3 - "$1" <<'PY'
+import os
+import sys
+
+path = sys.argv[1]
+if not os.path.exists(path):
+    print(0)
+elif os.path.isfile(path):
+    print(os.path.getsize(path))
+else:
+    total = 0
+    for root, _, files in os.walk(path):
+        for name in files:
+            candidate = os.path.join(root, name)
+            if os.path.isfile(candidate):
+                total += os.path.getsize(candidate)
+    print(total)
+PY
+}
+
+nvim_executable_bytes=$(footprint_bytes "$NVIM_TEST_BIN")
+nvim_config_bytes=$(footprint_bytes "$HOME/.config/nvim")
+nvim_state_bytes=$(footprint_bytes "$XDG_STATE_HOME/nvim")
+nvim_cache_bytes=$(footprint_bytes "$XDG_CACHE_HOME/nvim")
+nvim_source_harness_bytes=$((nvim_executable_bytes + nvim_config_bytes + nvim_state_bytes + nvim_cache_bytes))
+printf 'profile=editor scope=source-harness category=nvim-executable bytes=%s\n' "$nvim_executable_bytes"
+printf 'profile=editor scope=source-harness category=nvim-config bytes=%s\n' "$nvim_config_bytes"
+printf 'profile=editor scope=source-harness category=nvim-state bytes=%s\n' "$nvim_state_bytes"
+printf 'profile=editor scope=source-harness category=nvim-cache bytes=%s\n' "$nvim_cache_bytes"
+printf 'profile=editor scope=source-harness category=total bytes=%s\n' "$nvim_source_harness_bytes"
+if [[ -e $NVIM_TEST_GRAPH_MARKER ]]; then
+  nvim_plugin_bytes=0
+  for required_plugin in lazy.nvim LazyVim nvim-workspace; do
+    awk -F '\t' -v name="$required_plugin" '$1 == name { found=1 } END { exit !found }' \
+      "$NVIM_TEST_GRAPH_INVENTORY" || {
+      echo "installed editor plugin graph is empty or incomplete: $required_plugin" >&2
+      exit 1
+    }
+  done
+  while IFS=$'\t' read -r plugin_name plugin_path extra; do
+    [[ $plugin_name =~ ^[A-Za-z0-9._-]+$ && $plugin_path == /* && -z ${extra:-} ]] || {
+      echo 'installed editor plugin graph inventory is malformed' >&2
+      exit 1
+    }
+    [[ -d $plugin_path ]] || {
+      echo "installed editor plugin path is missing: $plugin_name" >&2
+      exit 1
+    }
+    nvim_plugin_bytes=$((nvim_plugin_bytes + $(footprint_bytes "$plugin_path")))
+  done <"$NVIM_TEST_GRAPH_INVENTORY"
+  nvim_incremental_bytes=$((nvim_source_harness_bytes + nvim_plugin_bytes))
+  printf 'profile=editor scope=installed-editor category=nvim-plugin-graph bytes=%s\n' "$nvim_plugin_bytes"
+  printf 'profile=editor scope=installed-editor category=incremental-total bytes=%s\n' "$nvim_incremental_bytes"
+  ((nvim_incremental_bytes <= 500 * 1024 * 1024)) || {
+    echo 'installed editor footprint exceeds the 500 MiB budget' >&2
+    exit 1
+  }
+else
+  printf 'profile=editor scope=installed-editor category=nvim-plugin-graph status=not-measured reason=unsupported-libc\n'
+fi
+
 # Prove a listed suite is linked from a sync=none overlay and executed by Dot,
 # independent of the bootstrap repository's intentionally empty inventory.
 synthetic_overlay=$tmp/synthetic-overlay
 synthetic_home=$tmp/synthetic-home
 synthetic_suite=$synthetic_overlay/home/.local/lib/dotfiles/tests/synthetic-test
+fixture_umask=$(umask)
+umask 000
 mkdir -p "${synthetic_suite%/*}" "$synthetic_home/.local/bin" "$synthetic_home/.local/lib/dotfiles"
+# Shared CI deliberately exercises permissive umasks on some platforms.
+# Dot must still see the generated executable suite as owner-only.
+chmod 700 "${synthetic_suite%/*}"
 chmod 700 "$synthetic_home/.local/lib/dotfiles"
+mkdir -p "$synthetic_home/.config/dot/extensions"
+chmod 700 "$synthetic_home/.config/dot/extensions"
 cat >"$synthetic_suite" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 "${DOT_TEST_REPORTER:?}" complete 1 0
 EOF
-chmod +x "$synthetic_suite"
+chmod 700 "$synthetic_suite"
+umask "$fixture_umask"
 capability_fixture_create "$synthetic_home" "$synthetic_overlay"
 ln -s "$dot_checkout/bin/dot" "$synthetic_home/.local/bin/dot"
 export HOME=$synthetic_home
