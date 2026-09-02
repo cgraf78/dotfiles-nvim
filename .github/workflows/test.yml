@@ -16,7 +16,7 @@ env:
 
 jobs:
   shell:
-    uses: cgraf78/actions/.github/workflows/shell-ci.yml@dc7be3dcf6da264083f229d78818c2ad087a3d34
+    uses: cgraf78/actions/.github/workflows/shell-ci.yml@b97bd729afec784785bd01ebd43321225ef47bb7
     with:
       setup: none
       matrix-set: full
@@ -34,7 +34,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: cgraf78/actions/.github/actions/verify-consumer-sync@dc7be3dcf6da264083f229d78818c2ad087a3d34
+      - uses: cgraf78/actions/.github/actions/verify-consumer-sync@b97bd729afec784785bd01ebd43321225ef47bb7
 
       - name: Verify public repository and license
         env:
