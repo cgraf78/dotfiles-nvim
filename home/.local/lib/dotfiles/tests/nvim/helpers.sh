@@ -218,7 +218,7 @@ _nvim_repo_root() {
   case $helper_source in
     */home/.local/lib/dotfiles/tests/nvim/helpers.sh)
       candidate=${helper_source%/home/.local/lib/dotfiles/tests/nvim/helpers.sh}
-      if [[ -f $candidate/.github/dotfiles-source.lock &&
+      if [[ -f $candidate/.github/dot-test-suites.txt &&
         -d $candidate/home ]]; then
         printf '%s\n' "$candidate"
         return 0
