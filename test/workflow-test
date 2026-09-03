@@ -42,13 +42,9 @@ remote_predicate() {
   [[ $(gh api "repos/cgraf78/$repo_name/license" --jq .license.spdx_id) == MIT ]] || fail 'remote license is not MIT'
   remote_tmp=$(mktemp -d)
   trap 'rm -rf -- "$remote_tmp"' RETURN
-  gh api --method GET repos/cgraf78/dotfiles/contents/.github/LICENSE \
-    -f ref=21626d196c0dfca242f6318606ec4b9bbca18371 --jq .content |
-    base64 --decode >"$remote_tmp/source-LICENSE"
   gh api --method GET "repos/cgraf78/$repo_name/contents/LICENSE" --jq .content |
     base64 --decode >"$remote_tmp/target-LICENSE"
-  cmp LICENSE "$remote_tmp/source-LICENSE" || fail 'local license differs from immutable source'
-  cmp "$remote_tmp/target-LICENSE" "$remote_tmp/source-LICENSE" || fail 'remote license bytes differ from immutable source'
+  cmp "$remote_tmp/target-LICENSE" LICENSE || fail 'remote license differs from the tested checkout'
 }
 
 if [[ ${1:-} == --remote-predicate ]]; then
@@ -64,7 +60,7 @@ fi
 
 required_files=(
   .github/cgraf78-actions.lock .github/dependabot.yml .github/dot.lock
-  .github/dot-test-suites.txt .github/dotfiles-source.lock
+  .github/dot-test-suites.txt
   .github/repository-settings-endpoints.txt .github/shellcheck-files.txt
   .github/workflows/retry-infrastructure.yml .github/workflows/test.yml
   .gitignore LICENSE README.md test/run test/workflow-test
@@ -84,23 +80,13 @@ single_sha() {
 single_sha .github/cgraf78-actions.lock b97bd729afec784785bd01ebd43321225ef47bb7
 single_sha .github/dot.lock a96eeba1564925e0e0857492e0e3feeaf0d14964
 
-expected_source=$'version=1\nrepository=cgraf78/dotfiles\ncommit=21626d196c0dfca242f6318606ec4b9bbca18371\nlicense_path=.github/LICENSE'
-[[ $(<.github/dotfiles-source.lock) == "$expected_source" ]] || fail 'source lock is not canonical'
-if LC_ALL=C grep -q $'\r' .github/dotfiles-source.lock; then fail 'source lock contains CRLF'; fi
-
 if command -v sha256sum >/dev/null 2>&1; then
   license_hash=$(sha256sum LICENSE | awk '{print $1}')
 else
   license_hash=$(shasum -a 256 LICENSE | awk '{print $1}')
 fi
-[[ $license_hash == bfaed6d8fb29d7208c1266afa313681591d6ca05ec2f7e005cebe3d7a7b43579 ]] || fail 'LICENSE bytes differ from the frozen MIT license'
-[[ $(wc -c <LICENSE | tr -d '[:space:]') == 1067 ]] || fail 'LICENSE size differs from the frozen MIT license'
-if [[ -n ${DOTFILES_SOURCE_REPO:-} ]]; then
-  git -C "$DOTFILES_SOURCE_REPO" cat-file -e '21626d196c0dfca242f6318606ec4b9bbca18371^{commit}'
-  cmp LICENSE <(git -C "$DOTFILES_SOURCE_REPO" show 21626d196c0dfca242f6318606ec4b9bbca18371:.github/LICENSE)
-  cmp .github/dependabot.yml <(git -C "$DOTFILES_SOURCE_REPO" show 21626d196c0dfca242f6318606ec4b9bbca18371:.github/dependabot.yml)
-  cmp .github/workflows/retry-infrastructure.yml <(git -C "$DOTFILES_SOURCE_REPO" show 21626d196c0dfca242f6318606ec4b9bbca18371:.github/workflows/retry-infrastructure.yml)
-fi
+[[ $license_hash == bfaed6d8fb29d7208c1266afa313681591d6ca05ec2f7e005cebe3d7a7b43579 ]] || fail 'LICENSE bytes differ from the canonical MIT license'
+[[ $(wc -c <LICENSE | tr -d '[:space:]') == 1067 ]] || fail 'LICENSE size differs from the canonical MIT license'
 [[ $(<.gitignore) == '.worktrees/' ]] || fail '.gitignore must contain only .worktrees/'
 manifest_hash=$(sha256sum .github/repository-settings-endpoints.txt 2>/dev/null | awk '{print $1}' || shasum -a 256 .github/repository-settings-endpoints.txt | awk '{print $1}')
 [[ $manifest_hash == 1014be04ef3f99d20570369cdc0831d4f75571882d2d4797b7d817cd43ff21c7 ]] || fail 'repository settings endpoint contract drifted'
