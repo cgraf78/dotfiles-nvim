@@ -59,7 +59,7 @@ if [[ -n ${WORKFLOW_TEST_COUNT_FILE:-} ]]; then
 fi
 
 required_files=(
-  .github/cgraf78-actions.lock .github/dependabot.yml .github/dot.lock
+  .github/cgraf78-actions.lock .github/dependabot.yml
   .github/dot-test-suites.txt
   .github/repository-settings-endpoints.txt .github/shellcheck-files.txt
   .github/workflows/retry-infrastructure.yml .github/workflows/test.yml
@@ -68,6 +68,8 @@ required_files=(
   test/lib/wait-github-state.sh
 )
 for path in "${required_files[@]}"; do [[ -f $path ]] || fail "missing required file: $path"; done
+[[ ! -e .github/dot.lock && ! -L .github/dot.lock ]] ||
+  fail 'retired Dot test lock must stay absent'
 [[ -d home && ! -e home/.gitkeep ]] || fail 'final capability payload must replace home/.gitkeep'
 
 single_sha() {
@@ -78,7 +80,20 @@ single_sha() {
   [[ $value == "$expected" ]] || fail "$file contains an unexpected commit SHA"
 }
 single_sha .github/cgraf78-actions.lock b97bd729afec784785bd01ebd43321225ef47bb7
-single_sha .github/dot.lock a96eeba1564925e0e0857492e0e3feeaf0d14964
+# shellcheck disable=SC2016 # Match the literal defaulting expression.
+grep -F 'dot_revision=${DOT_TEST_DOT_REVISION:-main}' test/run >/dev/null ||
+  fail 'capability tests do not default to current Dot main'
+grep -F 'checkout --quiet --detach FETCH_HEAD' test/run >/dev/null ||
+  fail 'capability tests do not freeze the resolved Dot revision per run'
+grep -F 'clean_git_env=(' test/run >/dev/null ||
+  fail 'Dot bootstrap does not define an isolated Git environment'
+grep -F 'GIT_CONFIG_GLOBAL=/dev/null' test/run >/dev/null ||
+  fail 'Dot bootstrap does not disable inherited global Git config'
+grep -F 'GIT_CONFIG_NOSYSTEM=1' test/run >/dev/null ||
+  fail 'Dot bootstrap does not disable inherited system Git config'
+# shellcheck disable=SC2016 # Match the literal bootstrap checkout path.
+grep -F 'ci_git init --quiet "$dot_checkout"' test/run >/dev/null ||
+  fail 'Dot bootstrap does not use its isolated Git boundary'
 
 if command -v sha256sum >/dev/null 2>&1; then
   license_hash=$(sha256sum LICENSE | awk '{print $1}')

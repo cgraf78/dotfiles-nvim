@@ -46,7 +46,7 @@ EOF
   DOT_DOCTOR_RESULT_FILE=$tmp/doctor-results.tsv
   export DOT_DOCTOR_RESULT_FILE
   _test_load_dot_doctor_api "$api_home" || {
-    nvim_test_fail 'Neovim doctor tests load the pinned Dot public doctor API'
+    nvim_test_fail 'Neovim doctor tests load the resolved Dot public doctor API'
     return
   }
   eval "$(declare -f dot_doctor_source | sed '1s/^dot_doctor_source /_nvim_public_dot_doctor_source /')"
