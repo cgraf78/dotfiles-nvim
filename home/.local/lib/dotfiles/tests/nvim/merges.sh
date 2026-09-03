@@ -32,7 +32,7 @@ EOF
   : >"$public_api_log"
   export NVIM_TEST_PUBLIC_HOOK_API_LOG=$public_api_log
   nvim_test_load_merge_api "$api_home" || {
-    nvim_test_fail 'Neovim merge hook loads through the pinned Dot public hook API'
+    nvim_test_fail 'Neovim merge hook loads through the resolved Dot public hook API'
     return
   }
 

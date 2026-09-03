@@ -71,14 +71,51 @@ capability_fixture_create "$fixture_home" "$repo_root"
 [[ ! -e $fixture_home/.git && ! -e $fixture_home/.dotfiles ]]
 grep -Fx "path=$repo_root" "$fixture_home/.config/dot/overlays.d/20-nvim.conf" >/dev/null
 
-dot_sha=$(<.github/dot.lock)
+dot_revision=${DOT_TEST_DOT_REVISION:-main}
+[[ $dot_revision =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ &&
+  $dot_revision != *..* ]] || {
+  echo "invalid Dot test revision: $dot_revision" >&2
+  exit 1
+}
 dot_checkout=$tmp/xdg-data/cgraf78/dot
-mkdir -p "${dot_checkout%/*}" "$fixture_home/.local/bin"
-git init --quiet "$dot_checkout"
-git -C "$dot_checkout" remote add origin "${DOT_REPOSITORY:-https://github.com/cgraf78/dot.git}"
-git -C "$dot_checkout" fetch --quiet --depth=1 origin "$dot_sha"
-git -C "$dot_checkout" checkout --quiet --detach FETCH_HEAD
-[[ $(git -C "$dot_checkout" rev-parse HEAD) == "$dot_sha" ]]
+git_home=$tmp/git-home
+mkdir -p "${dot_checkout%/*}" "$fixture_home/.local/bin" "$git_home"
+clean_git_env=(
+  env
+  -u GIT_DIR
+  -u GIT_WORK_TREE
+  -u GIT_COMMON_DIR
+  -u GIT_IMPLICIT_WORK_TREE
+  -u GIT_PREFIX
+  -u GIT_INDEX_FILE
+  -u GIT_OBJECT_DIRECTORY
+  -u GIT_ALTERNATE_OBJECT_DIRECTORIES
+  -u GIT_SHALLOW_FILE
+  -u GIT_CONFIG
+  -u GIT_CONFIG_GLOBAL
+  -u GIT_CONFIG_SYSTEM
+  -u GIT_CONFIG_NOSYSTEM
+  -u GIT_CONFIG_COUNT
+  -u GIT_CONFIG_PARAMETERS
+  -u GIT_NAMESPACE
+  -u GIT_GRAFT_FILE
+  -u GIT_REPLACE_REF_BASE
+  -u GIT_NO_REPLACE_OBJECTS
+  HOME="$git_home"
+  XDG_CONFIG_HOME="$git_home/.config"
+  GIT_CONFIG_GLOBAL=/dev/null
+  GIT_CONFIG_NOSYSTEM=1
+  GIT_NO_REPLACE_OBJECTS=1
+)
+ci_git() {
+  "${clean_git_env[@]}" git --no-replace-objects "$@"
+}
+ci_git init --quiet "$dot_checkout"
+ci_git -C "$dot_checkout" remote add origin "${DOT_REPOSITORY:-https://github.com/cgraf78/dot.git}"
+ci_git -C "$dot_checkout" fetch --quiet --depth=1 origin "$dot_revision"
+dot_sha=$(ci_git -C "$dot_checkout" rev-parse FETCH_HEAD)
+ci_git -C "$dot_checkout" checkout --quiet --detach FETCH_HEAD
+[[ $(ci_git -C "$dot_checkout" rev-parse HEAD) == "$dot_sha" ]]
 ln -s "$dot_checkout/bin/dot" "$fixture_home/.local/bin/dot"
 
 # Keep user-local host tools out of capability tests. Resolve only commands
