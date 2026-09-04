@@ -280,8 +280,8 @@ suite_root=$repo_root/home/.local/lib/dotfiles/tests
 validate_suite_inventory "$suite_root" .github/dot-test-suites.txt "$repo_root" >"$tmp/suites"
 mapfile -t suites <"$tmp/suites"
 
-if [[ ${DOTFILES_CAPABILITY_PHASE:-final} == final && ${#suites[@]} -eq 0 ]]; then
-  echo 'final capability repository requires at least one focused suite' >&2
+if ((${#suites[@]} == 0)); then
+  echo 'capability repository requires at least one focused suite' >&2
   exit 1
 fi
 if ((${#suites[@]} > 0)); then
@@ -352,7 +352,7 @@ else
 fi
 
 # Prove a listed suite is linked from a sync=none overlay and executed by Dot,
-# independent of the bootstrap repository's intentionally empty inventory.
+# independent of the synthetic base fixture's empty inventory.
 synthetic_overlay=$tmp/synthetic-overlay
 synthetic_home=$tmp/synthetic-home
 synthetic_suite=$synthetic_overlay/home/.local/lib/dotfiles/tests/synthetic-test
