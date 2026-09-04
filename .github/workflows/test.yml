@@ -11,9 +11,6 @@ on:
 permissions:
   contents: read
 
-env:
-  DOTFILES_CAPABILITY_PHASE: final
-
 jobs:
   shell:
     uses: cgraf78/actions/.github/workflows/shell-ci.yml@b97bd729afec784785bd01ebd43321225ef47bb7
