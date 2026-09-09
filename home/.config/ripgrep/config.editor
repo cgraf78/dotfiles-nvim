@@ -1,5 +1,8 @@
 --smart-case
 --hidden
+# Follow symlinks: skipping them silently produces incomplete results with
+# no warning, which is worse than occasionally searching a file twice.
+--follow
 --glob=!.git
 --max-columns=200
 --max-columns-preview
