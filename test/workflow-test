@@ -75,7 +75,7 @@ single_sha() {
   [[ $value =~ ^[0-9a-f]{40}$ ]] || fail "$file does not contain a full lowercase commit SHA"
   [[ $value == "$expected" ]] || fail "$file contains an unexpected commit SHA"
 }
-single_sha .github/cgraf78-actions.lock b97bd729afec784785bd01ebd43321225ef47bb7
+single_sha .github/cgraf78-actions.lock b750c292f00e079c2270df0d8f4c8bdaf43e0356
 # shellcheck disable=SC2016 # Match the literal defaulting expression.
 grep -F 'dot_revision=${DOT_TEST_DOT_REVISION:-main}' test/run >/dev/null ||
   fail 'capability tests do not default to current Dot main'
