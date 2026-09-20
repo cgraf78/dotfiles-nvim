@@ -204,7 +204,7 @@ _test_dot_root() {
     "${DOT_TEST_DOT_ROOT:-}" \
     "$host_home/git/dot" \
     "$host_home/.local/share/cgraf78/dot"; do
-    [[ -n $candidate && -r $candidate/lib/dot/extension-worker.sh ]] || continue
+    [[ -n $candidate && -r $candidate/lib/dot/public/api-version.sh ]] || continue
     (cd -P -- "$candidate" && pwd -P)
     return
   done
@@ -252,22 +252,24 @@ _test_load_dot_merge_api() {
 
   # shellcheck source=/dev/null
   . "$dot_root/lib/dot/public/xdg.sh"
+  # Post-cutover the engine-internal shell libraries live only in the
+  # versioned public hook runtime; extension tests load that runtime.
   # shellcheck source=/dev/null
-  . "$dot_root/lib/dot/log.sh"
+  . "$dot_root/lib/dot/public/hook-runtime-v1/log.sh"
   # shellcheck source=/dev/null
-  . "$dot_root/lib/dot/temp.sh"
+  . "$dot_root/lib/dot/public/hook-runtime-v1/temp.sh"
   # shellcheck source=/dev/null
-  . "$dot_root/lib/dot/merge-block.sh"
+  . "$dot_root/lib/dot/public/hook-runtime-v1/merge-block.sh"
   # shellcheck source=/dev/null
-  . "$dot_root/lib/dot/families.sh"
+  . "$dot_root/lib/dot/public/hook-runtime-v1/families.sh"
   # shellcheck source=/dev/null
-  . "$dot_root/lib/dot/merge-hooks.sh"
+  . "$dot_root/lib/dot/public/hook-runtime-v1/merge-hooks.sh"
   # shellcheck source=/dev/null
-  . "$dot_root/lib/dot/extension-trust.sh"
+  . "$dot_root/lib/dot/public/hook-runtime-v1/extension-trust.sh"
   # shellcheck source=/dev/null
-  . "$dot_root/lib/dot/repos/overlays.sh"
+  . "$dot_root/lib/dot/public/hook-runtime-v1/repos/overlays.sh"
   # shellcheck source=/dev/null
-  . "$dot_root/lib/dot/hook-api.sh"
+  . "$dot_root/lib/dot/public/hook-runtime-v1/hook-api.sh"
 }
 
 # Load the standalone doctor extension API plus the dotfiles-owned application
@@ -289,11 +291,11 @@ _test_load_dot_doctor_api() {
   # shellcheck source=/dev/null
   . "$dot_root/lib/dot/public/xdg.sh"
   # shellcheck source=/dev/null
-  . "$dot_root/lib/dot/extension-trust.sh"
+  . "$dot_root/lib/dot/public/hook-runtime-v1/extension-trust.sh"
   # shellcheck source=/dev/null
-  . "$dot_root/lib/dot/repos/overlays.sh"
+  . "$dot_root/lib/dot/public/hook-runtime-v1/repos/overlays.sh"
   # shellcheck source=/dev/null
-  . "$dot_root/lib/dot/doctor-api.sh"
+  . "$dot_root/lib/dot/public/hook-runtime-v1/doctor-api.sh"
   dot_doctor_source doctor.d/lib/compat.sh || return 1
 }
 
