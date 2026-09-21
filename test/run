@@ -115,7 +115,7 @@ _capability_dot_release_platform() {
   fi
 }
 
-# Download the pinned Dot release asset plus its .sha256 sidecar, verify
+# Download the resolved Dot release asset plus its .sha256 sidecar, verify
 # the checksum, and extract into $4 (which must already exist and be empty).
 _capability_dot_release_fetch() {
   local repo=${1:-} tag=${2:-} platform=${3:-} dest=${4:-}
@@ -177,23 +177,62 @@ _capability_dot_release_fetch() {
   rm -rf -- "$scratch"
 }
 
-# Post-cutover the engine ships only as a native binary, and the CI matrix
-# images carry no Rust toolchain: capability CI consumes a pinned Dot
-# release (checksum-verified, frozen per run) instead of a source checkout
-# it cannot build. Move the pin by reviewed PR when the fleet adopts a
-# newer release, mirroring the base live-release suite.
-dot_release_tag=${DOT_TEST_DOT_RELEASE_TAG:-20260919-024434-6a875117}
-dot_release_repo=${DOT_TEST_DOT_RELEASE_REPO:-cgraf78/dot}
-[[ $dot_release_tag =~ ^[0-9]{8}-[0-9]{6}-[0-9a-f]{8}$ ]] || {
-  echo "invalid Dot test release tag: $dot_release_tag" >&2
-  exit 1
+# Resolve the newest published Dot release tag through the anonymous web
+# redirect (/releases/latest -> /releases/tag/<tag>), without touching
+# api.github.com. Mirrors the base resolver, including repository and
+# release-grammar validation; the caller re-validates to cover explicit
+# tags as well.
+_capability_dot_release_latest_tag() {
+  local repo=${1:-} effective tag
+  [[ -n $repo ]] || {
+    echo 'Dot latest-tag lookup is missing the repository' >&2
+    return 1
+  }
+  case $repo in
+    *[!A-Za-z0-9._/-]* | */*/* | /* | */ | *..*)
+      echo "invalid Dot test release repository: $repo" >&2
+      return 1
+      ;;
+  esac
+  effective=$(curl -fsSIL -o /dev/null -w '%{url_effective}' \
+    "https://github.com/$repo/releases/latest") || {
+    echo "could not resolve the latest Dot release for $repo" >&2
+    return 1
+  }
+  tag=${effective##*/}
+  [[ $effective != */releases || $tag != releases ]] || {
+    echo "Dot repository has no releases yet: $repo" >&2
+    return 1
+  }
+  [[ $tag =~ ^[0-9]{8}-[0-9]{6}-[0-9a-f]{8}$ ]] || {
+    echo "unexpected latest-release redirect: $effective" >&2
+    return 1
+  }
+  printf '%s\n' "$tag"
 }
+
+# Post-cutover the engine ships only as a native binary, and the CI matrix
+# images carry no Rust toolchain: capability CI consumes the latest Dot
+# release (checksum-verified, resolved once and frozen per run) instead of
+# a source checkout it cannot build, matching what the fleet installs. An
+# explicit DOT_TEST_DOT_RELEASE_TAG still selects that exact release.
+dot_release_tag_request=${DOT_TEST_DOT_RELEASE_TAG:-latest}
+dot_release_repo=${DOT_TEST_DOT_RELEASE_REPO:-cgraf78/dot}
 case $dot_release_repo in
   *[!A-Za-z0-9._/-]* | */*/* | /* | */ | *..*)
     echo "invalid Dot test release repository: $dot_release_repo" >&2
     exit 1
     ;;
 esac
+if [[ $dot_release_tag_request == latest ]]; then
+  dot_release_tag="$(_capability_dot_release_latest_tag "$dot_release_repo")" || exit 1
+else
+  dot_release_tag=$dot_release_tag_request
+fi
+[[ $dot_release_tag =~ ^[0-9]{8}-[0-9]{6}-[0-9a-f]{8}$ ]] || {
+  echo "invalid Dot test release tag: $dot_release_tag" >&2
+  exit 1
+}
 dot_checkout=$tmp/xdg-data/cgraf78/dot
 mkdir -p "$dot_checkout" "$fixture_home/.local/bin"
 dot_release_platform=$(_capability_dot_release_platform) || exit 1

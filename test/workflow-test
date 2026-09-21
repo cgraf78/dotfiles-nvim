@@ -77,12 +77,18 @@ single_sha() {
 }
 single_sha .github/cgraf78-actions.lock b750c292f00e079c2270df0d8f4c8bdaf43e0356
 # shellcheck disable=SC2016 # Match the literal defaulting expression.
-grep -F 'dot_release_tag=${DOT_TEST_DOT_RELEASE_TAG:-' test/run >/dev/null ||
-  fail 'capability tests do not pin the Dot release per run'
+grep -F 'dot_release_tag_request=${DOT_TEST_DOT_RELEASE_TAG:-latest}' test/run >/dev/null ||
+  fail 'capability tests do not float the Dot release per run'
+# shellcheck disable=SC2016 # Match the literal resolver call shape.
+grep -F '$(_capability_dot_release_latest_tag' test/run >/dev/null ||
+  fail 'Dot bootstrap does not resolve the latest release'
+if grep -Eq 'DOT_TEST_DOT_RELEASE_TAG:-[0-9]{8}-[0-9]{6}-[0-9a-f]{8}' test/run; then
+  fail 'capability tests pin a concrete Dot release instead of floating to latest'
+fi
 grep -F '_capability_dot_release_platform' test/run >/dev/null ||
   fail 'Dot bootstrap does not map the release platform'
 grep -F '_capability_dot_release_fetch' test/run >/dev/null ||
-  fail 'Dot bootstrap does not fetch the pinned Dot release'
+  fail 'Dot bootstrap does not fetch the resolved Dot release'
 grep -F 'checksum mismatch for' test/run >/dev/null ||
   fail 'Dot release fetch does not verify the checksum'
 grep -F 'refusing to extract into a nonempty directory' test/run >/dev/null ||
