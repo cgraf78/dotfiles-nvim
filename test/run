@@ -195,6 +195,7 @@ _capability_dot_release_latest_tag() {
       ;;
   esac
   effective=$(curl -fsSIL -o /dev/null -w '%{url_effective}' \
+    --retry 2 --retry-delay 2 --retry-max-time 65 --retry-all-errors \
     "https://github.com/$repo/releases/latest") || {
     echo "could not resolve the latest Dot release for $repo" >&2
     return 1

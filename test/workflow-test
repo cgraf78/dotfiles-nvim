@@ -82,6 +82,9 @@ grep -F 'dot_release_tag_request=${DOT_TEST_DOT_RELEASE_TAG:-latest}' test/run >
 # shellcheck disable=SC2016 # Match the literal resolver call shape.
 grep -F '$(_capability_dot_release_latest_tag' test/run >/dev/null ||
   fail 'Dot bootstrap does not resolve the latest release'
+sed -n '/^_capability_dot_release_latest_tag/,/^}/p' test/run |
+  grep -F -e '--retry-all-errors' >/dev/null ||
+  fail 'Dot bootstrap does not retry the latest-release lookup'
 if grep -Eq 'DOT_TEST_DOT_RELEASE_TAG:-[0-9]{8}-[0-9]{6}-[0-9a-f]{8}' test/run; then
   fail 'capability tests pin a concrete Dot release instead of floating to latest'
 fi
