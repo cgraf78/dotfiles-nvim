@@ -77,19 +77,16 @@ single_sha() {
 }
 single_sha .github/cgraf78-actions.lock b750c292f00e079c2270df0d8f4c8bdaf43e0356
 # shellcheck disable=SC2016 # Match the literal defaulting expression.
-grep -F 'dot_revision=${DOT_TEST_DOT_REVISION:-main}' test/run >/dev/null ||
-  fail 'capability tests do not default to current Dot main'
-grep -F 'checkout --quiet --detach FETCH_HEAD' test/run >/dev/null ||
-  fail 'capability tests do not freeze the resolved Dot revision per run'
-grep -F 'clean_git_env=(' test/run >/dev/null ||
-  fail 'Dot bootstrap does not define an isolated Git environment'
-grep -F 'GIT_CONFIG_GLOBAL=/dev/null' test/run >/dev/null ||
-  fail 'Dot bootstrap does not disable inherited global Git config'
-grep -F 'GIT_CONFIG_NOSYSTEM=1' test/run >/dev/null ||
-  fail 'Dot bootstrap does not disable inherited system Git config'
-# shellcheck disable=SC2016 # Match the literal bootstrap checkout path.
-grep -F 'ci_git init --quiet "$dot_checkout"' test/run >/dev/null ||
-  fail 'Dot bootstrap does not use its isolated Git boundary'
+grep -F 'dot_release_tag=${DOT_TEST_DOT_RELEASE_TAG:-' test/run >/dev/null ||
+  fail 'capability tests do not pin the Dot release per run'
+grep -F '_capability_dot_release_platform' test/run >/dev/null ||
+  fail 'Dot bootstrap does not map the release platform'
+grep -F '_capability_dot_release_fetch' test/run >/dev/null ||
+  fail 'Dot bootstrap does not fetch the pinned Dot release'
+grep -F 'checksum mismatch for' test/run >/dev/null ||
+  fail 'Dot release fetch does not verify the checksum'
+grep -F 'refusing to extract into a nonempty directory' test/run >/dev/null ||
+  fail 'Dot release fetch does not guard the destination'
 
 if command -v sha256sum >/dev/null 2>&1; then
   license_hash=$(sha256sum LICENSE | awk '{print $1}')

@@ -71,52 +71,136 @@ capability_fixture_create "$fixture_home" "$repo_root"
 [[ ! -e $fixture_home/.git && ! -e $fixture_home/.dotfiles ]]
 grep -Fx "path=$repo_root" "$fixture_home/.config/dot/overlays.d/20-nvim.conf" >/dev/null
 
-dot_revision=${DOT_TEST_DOT_REVISION:-main}
-[[ $dot_revision =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ &&
-  $dot_revision != *..* ]] || {
-  echo "invalid Dot test revision: $dot_revision" >&2
+# Map this machine to the Dot release platform suffix. Mirrors the base
+# resolver: Termux reports Android through uname -o with the PREFIX
+# spelling as the established fallback for minimal uname builds.
+_capability_dot_release_platform() {
+  local kernel machine system arch
+  kernel=$(uname -s)
+  machine=$(uname -m)
+  system=$(uname -o 2>/dev/null || true)
+  if [[ $system == Android || ${PREFIX:-} == *com.termux*/usr ]]; then
+    case $machine in
+      x86_64) arch=x86_64 ;;
+      aarch64 | arm64) arch=aarch64 ;;
+      *)
+        echo "unsupported Android architecture: $machine" >&2
+        return 1
+        ;;
+    esac
+    printf 'android-%s\n' "$arch"
+    return 0
+  fi
+  case $kernel in
+    Linux | Darwin) ;;
+    *)
+      echo "unsupported kernel: $kernel" >&2
+      return 1
+      ;;
+  esac
+  case $machine in
+    x86_64) arch=x86_64 ;;
+    aarch64 | arm64) arch=aarch64 ;;
+    *)
+      echo "unsupported $kernel architecture: $machine" >&2
+      return 1
+      ;;
+  esac
+  if [[ $kernel == Linux ]]; then
+    printf 'linux-%s-musl\n' "$arch"
+  elif [[ $arch == x86_64 ]]; then
+    printf 'macos-x86_64\n'
+  else
+    printf 'macos-aarch64\n'
+  fi
+}
+
+# Download the pinned Dot release asset plus its .sha256 sidecar, verify
+# the checksum, and extract into $4 (which must already exist and be empty).
+_capability_dot_release_fetch() {
+  local repo=${1:-} tag=${2:-} platform=${3:-} dest=${4:-}
+  local scratch tarball sidecar sum_bin
+  [[ -n $repo && -n $tag && -n $platform && -n $dest ]] || {
+    echo 'Dot release fetch is missing arguments' >&2
+    return 1
+  }
+  [[ -d $dest ]] || {
+    echo "Dot release destination is missing: $dest" >&2
+    return 1
+  }
+  [[ -z $(ls -A "$dest") ]] || {
+    echo "refusing to extract into a nonempty directory: $dest" >&2
+    return 1
+  }
+  if command -v sha256sum >/dev/null 2>&1; then
+    sum_bin=sha256sum
+  elif command -v shasum >/dev/null 2>&1; then
+    sum_bin='shasum -a 256'
+  else
+    echo 'sha256sum or shasum is required' >&2
+    return 1
+  fi
+  tarball=dot-$tag-$platform.tar.gz
+  sidecar=$tarball.sha256
+  scratch=$(mktemp -d) || return 1
+  trap 'rm -rf -- "$scratch"' RETURN
+  curl --fail --silent --show-error --location \
+    --connect-timeout 10 --max-time 120 \
+    --retry 2 --retry-delay 2 --retry-max-time 65 --retry-all-errors \
+    "https://github.com/$repo/releases/download/$tag/$tarball" \
+    -o "$scratch/$tarball" || {
+    echo "could not download $tarball" >&2
+    return 1
+  }
+  curl --fail --silent --show-error --location \
+    --connect-timeout 10 --max-time 60 \
+    --retry 2 --retry-delay 2 --retry-max-time 65 --retry-all-errors \
+    "https://github.com/$repo/releases/download/$tag/$sidecar" \
+    -o "$scratch/$sidecar" || {
+    echo "could not download $sidecar" >&2
+    return 1
+  }
+  # shellcheck disable=SC2086 # The checksum command is selected above.
+  (cd "$scratch" && $sum_bin -c "$sidecar") >/dev/null || {
+    echo "checksum mismatch for $tarball" >&2
+    return 1
+  }
+  tar -xzf "$scratch/$tarball" -C "$dest" || {
+    echo "could not extract $tarball" >&2
+    return 1
+  }
+  if [[ -e $dest/.shdeps-release-layout || -L $dest/.shdeps-release-layout ]]; then
+    echo 'archive ships reserved shdeps marker' >&2
+    return 1
+  fi
+  trap - RETURN
+  rm -rf -- "$scratch"
+}
+
+# Post-cutover the engine ships only as a native binary, and the CI matrix
+# images carry no Rust toolchain: capability CI consumes a pinned Dot
+# release (checksum-verified, frozen per run) instead of a source checkout
+# it cannot build. Move the pin by reviewed PR when the fleet adopts a
+# newer release, mirroring the base live-release suite.
+dot_release_tag=${DOT_TEST_DOT_RELEASE_TAG:-20260919-024434-6a875117}
+dot_release_repo=${DOT_TEST_DOT_RELEASE_REPO:-cgraf78/dot}
+[[ $dot_release_tag =~ ^[0-9]{8}-[0-9]{6}-[0-9a-f]{8}$ ]] || {
+  echo "invalid Dot test release tag: $dot_release_tag" >&2
   exit 1
 }
+case $dot_release_repo in
+  *[!A-Za-z0-9._/-]* | */*/* | /* | */ | *..*)
+    echo "invalid Dot test release repository: $dot_release_repo" >&2
+    exit 1
+    ;;
+esac
 dot_checkout=$tmp/xdg-data/cgraf78/dot
-git_home=$tmp/git-home
-mkdir -p "${dot_checkout%/*}" "$fixture_home/.local/bin" "$git_home"
-clean_git_env=(
-  env
-  -u GIT_DIR
-  -u GIT_WORK_TREE
-  -u GIT_COMMON_DIR
-  -u GIT_IMPLICIT_WORK_TREE
-  -u GIT_PREFIX
-  -u GIT_INDEX_FILE
-  -u GIT_OBJECT_DIRECTORY
-  -u GIT_ALTERNATE_OBJECT_DIRECTORIES
-  -u GIT_SHALLOW_FILE
-  -u GIT_CONFIG
-  -u GIT_CONFIG_GLOBAL
-  -u GIT_CONFIG_SYSTEM
-  -u GIT_CONFIG_NOSYSTEM
-  -u GIT_CONFIG_COUNT
-  -u GIT_CONFIG_PARAMETERS
-  -u GIT_NAMESPACE
-  -u GIT_GRAFT_FILE
-  -u GIT_REPLACE_REF_BASE
-  -u GIT_NO_REPLACE_OBJECTS
-  HOME="$git_home"
-  XDG_CONFIG_HOME="$git_home/.config"
-  GIT_CONFIG_GLOBAL=/dev/null
-  GIT_CONFIG_NOSYSTEM=1
-  GIT_NO_REPLACE_OBJECTS=1
-)
-ci_git() {
-  "${clean_git_env[@]}" git --no-replace-objects "$@"
-}
-ci_git init --quiet "$dot_checkout"
-ci_git -C "$dot_checkout" remote add origin "${DOT_REPOSITORY:-https://github.com/cgraf78/dot.git}"
-ci_git -C "$dot_checkout" fetch --quiet --depth=1 origin "$dot_revision"
-dot_sha=$(ci_git -C "$dot_checkout" rev-parse FETCH_HEAD)
-ci_git -C "$dot_checkout" checkout --quiet --detach FETCH_HEAD
-[[ $(ci_git -C "$dot_checkout" rev-parse HEAD) == "$dot_sha" ]]
-ln -s "$dot_checkout/bin/dot" "$fixture_home/.local/bin/dot"
+mkdir -p "$dot_checkout" "$fixture_home/.local/bin"
+dot_release_platform=$(_capability_dot_release_platform) || exit 1
+_capability_dot_release_fetch \
+  "$dot_release_repo" "$dot_release_tag" "$dot_release_platform" \
+  "$dot_checkout" || exit 1
+ln -s "$dot_checkout/dot" "$fixture_home/.local/bin/dot"
 
 # Keep user-local host tools out of capability tests. Resolve only commands
 # supplied by audited system/prerequisite roots into a private fixture bin.
@@ -373,7 +457,7 @@ EOF
 chmod 700 "$synthetic_suite"
 umask "$fixture_umask"
 capability_fixture_create "$synthetic_home" "$synthetic_overlay"
-ln -s "$dot_checkout/bin/dot" "$synthetic_home/.local/bin/dot"
+ln -s "$dot_checkout/dot" "$synthetic_home/.local/bin/dot"
 export HOME=$synthetic_home
 export XDG_CONFIG_HOME=$synthetic_home/.config
 export XDG_STATE_HOME=$tmp/synthetic-state
