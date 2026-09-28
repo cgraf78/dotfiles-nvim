@@ -68,14 +68,16 @@ required_files=(
 )
 for path in "${required_files[@]}"; do [[ -f $path ]] || fail "missing required file: $path"; done
 
+# The lock is the one canonical cgraf78/actions pin; the ref check below holds
+# every workflow `uses:` to it. Validate only its shape here so the automated
+# repin, which rewrites the lock and the refs together, needs no test edit.
 single_sha() {
-  local file=$1 expected=$2 value
+  local file=$1 value
   [[ $(wc -l <"$file" | tr -d '[:space:]') == 1 ]] || fail "$file must contain exactly one line"
   value=$(<"$file")
   [[ $value =~ ^[0-9a-f]{40}$ ]] || fail "$file does not contain a full lowercase commit SHA"
-  [[ $value == "$expected" ]] || fail "$file contains an unexpected commit SHA"
 }
-single_sha .github/cgraf78-actions.lock b750c292f00e079c2270df0d8f4c8bdaf43e0356
+single_sha .github/cgraf78-actions.lock
 # shellcheck disable=SC2016 # Match the literal defaulting expression.
 grep -F 'dot_release_tag_request=${DOT_TEST_DOT_RELEASE_TAG:-latest}' test/run >/dev/null ||
   fail 'capability tests do not float the Dot release per run'
