@@ -23,6 +23,16 @@ export DOT_TEST=1
 # tests from writing __pycache__ beside source fixtures.
 export PYTHONDONTWRITEBYTECODE=1
 
+# Drop the startup-file hooks a live shell exports: BASH_ENV makes every
+# nested non-interactive bash load the user's env.d, and ENV does the same for
+# interactive sh. Fixture children run with a stub PATH or HOME, so inheriting
+# them loads the live environment into code under test, and a stub for a
+# command env.d itself runs (a `#!/usr/bin/env bash` uname) recurses without
+# end. Tests of startup files pass BASH_ENV or ENV to the child under test.
+# The suite shell itself has already loaded env.d at startup, and zsh children
+# still read $HOME/.zshenv, so use a fixture HOME or `zsh -f` where it matters.
+unset BASH_ENV ENV
+
 # `dot test` sets DOT_TEST_STYLE=1 for child suites when styled output is
 # appropriate. Individual suites keep exporting NO_COLOR for deterministic tool
 # output, so this opt-in is separate from NO_COLOR and only affects our harness
