@@ -13,6 +13,10 @@
 # second; the margin covers heavily loaded hosts. A busy Neovim can ignore
 # SIGTERM, so the timeout escalates to SIGKILL after a short grace period.
 _DR_NVIM_PROBE_TIMEOUT=8
+# Oldest Neovim the config runs on: LazyVim's own startup gate (the
+# `has("nvim-...")` check at the top of lua/lazyvim/plugins/init.lua). Keep
+# them in step; if LazyVim moves first, an in-between Neovim times out.
+_DR_NVIM_MIN_VERSION=0.11.2
 # timeout(1) or gtimeout, resolved per doctor run; empty when the host has none.
 _DR_NVIM_TIMEOUT_BIN=''
 # Lua run from --cmd to load a probe script; see _dr_nvim_probe.
@@ -29,16 +33,24 @@ _DR_NVIM_PROBE_LOADER+='if not ok then io.stderr:write(tostring(err), "\n"); vim
 # when the deadline escalates to SIGKILL. A Lua error escaping --cmd would
 # leave headless Neovim waiting for input, so the script loads under pcall
 # and any escaped error quits with status 3, its message on stderr.
-# REPLY: "complete", "timeout", or the exit status of a run that left no result.
+# Every probe gets private XDG state and cache directories under DIR, so
+# Neovim's log, Lua bytecode, and plugin caches never land in the user's.
+# REPLY: "complete", "timeout", "no-tmpdir" (no temp directories, nothing ran), or
+# the exit status of a run that left no result.
 _dr_nvim_probe() {
   local dir=$1 script=$2 status=0 started=$SECONDS
   local -a bound=()
   shift 2
 
+  if ! mkdir -p "$dir/state" "$dir/cache" 2>/dev/null; then
+    REPLY=no-tmpdir
+    return 0
+  fi
   [[ -z $_DR_NVIM_TIMEOUT_BIN ]] ||
     bound=("$_DR_NVIM_TIMEOUT_BIN" -k 1 "$_DR_NVIM_PROBE_TIMEOUT")
   {
     DOT_NVIM_PROBE_RESULT=$dir/result DOT_NVIM_PROBE_SCRIPT=$script \
+      XDG_STATE_HOME=$dir/state XDG_CACHE_HOME=$dir/cache \
       ${bound[@]+"${bound[@]}"} env -u TMUX -u TMUX_PANE \
       nvim --headless -i NONE "$@" --cmd "lua $_DR_NVIM_PROBE_LOADER" \
       </dev/null >/dev/null 2>"$dir/stderr"
@@ -75,7 +87,7 @@ _dr_nvim_one_line() {
 }
 
 _dr_check_nvim_config_syntax() {
-  local probe_dir kind value checked=0 errors=0 first_error=''
+  local probe_dir kind value checked=0 errors=0 first_error='' outside=0 first_outside=''
 
   probe_dir=$(mktemp -d "${TMPDIR:-/tmp}/dot-nvim-syntax.XXXXXX" 2>/dev/null) || {
     _dr_warn "nvim config syntax check failed" "could not create temp directory"
@@ -128,7 +140,12 @@ local function check()
 
   local function walk(dir, prefix)
     local real = uv.fs_realpath(dir)
-    if not real or seen[real] or not inside(real) then
+    if real and not inside(real) then
+      -- Never claim files under a link to an outside tree were checked.
+      emit("outside", prefix:sub(1, -2))
+      return
+    end
+    if not real or seen[real] then
       return
     end
     seen[real] = true
@@ -181,9 +198,16 @@ LUA
     _dr_warn "nvim config syntax check failed" "could not write temp file"
     return 0
   fi
-  _dr_nvim_probe "$probe_dir" "$probe_dir/syntax.lua" --clean -u NONE
+  # No user code or plugins run here, so the data directory is private too.
+  XDG_DATA_HOME=$probe_dir/data \
+    _dr_nvim_probe "$probe_dir" "$probe_dir/syntax.lua" --clean -u NONE
   case $REPLY in
     complete) ;;
+    no-tmpdir)
+      rm -rf "$probe_dir" 2>/dev/null || true
+      _dr_warn "nvim config syntax check failed" "could not create temp directory"
+      return 0
+      ;;
     timeout)
       rm -rf "$probe_dir" 2>/dev/null || true
       _dr_warn "nvim config syntax check timed out" \
@@ -214,6 +238,10 @@ LUA
         errors=$((errors + 1))
         [[ -n $first_error ]] || first_error=$value
         ;;
+      outside)
+        outside=$((outside + 1))
+        [[ -n $first_outside ]] || first_outside=$value
+        ;;
     esac
   done <"$probe_dir/result"
   rm -rf "$probe_dir" 2>/dev/null || true
@@ -221,6 +249,9 @@ LUA
   if ((errors > 0)); then
     _dr_fail "nvim config syntax errors" \
       "$errors of $checked Lua file(s); $(_dr_nvim_one_line "$first_error")"
+  elif ((outside > 0)); then
+    _dr_warn "nvim config syntax partly checked" \
+      "$checked Lua files valid; $outside linked director(ies) outside the config tree not checked, including $(_dr_nvim_one_line "$first_outside")"
   elif ((checked == 0)); then
     _dr_skip "nvim config syntax" "no Lua files in the configuration directory"
   else
@@ -230,7 +261,7 @@ LUA
 
 _dr_check_nvim_startup() {
   local probe_dir kind value stderr_text
-  local updating=0 stale_lock='' lazy_ready=0 missing=0 first_missing='' errors=0 first_error=''
+  local updating=0 stale_lock='' too_old=0 absent=0 lazy_ready=0 missing=0 first_missing='' errors=0 first_error=''
 
   # Unlike the syntax check, this runs user code, so it needs a deadline.
   if [[ -z $_DR_NVIM_TIMEOUT_BIN ]]; then
@@ -260,6 +291,14 @@ _dr_check_nvim_startup() {
 local result = assert(vim.env.DOT_NVIM_PROBE_RESULT)
 local home = vim.env.HOME or ""
 local records = {}
+
+-- LazyVim refuses older Neovim and then waits on getchar() for a keypress,
+-- which a headless probe would sit through until its deadline.
+if vim.fn.has("nvim-" .. vim.env.DOT_NVIM_MIN_VERSION) == 0 then
+  vim.fn.writefile({ "old" }, result)
+  vim.cmd("qall!")
+  return
+end
 
 -- A lock older than the editor's own wait limit is stale (its updater died
 -- before releasing it), and every interactive start now times out on it.
@@ -357,6 +396,9 @@ local function finish()
       record_error(errmsg)
     end
   end
+  if vim.g.plugin_manager_missing then
+    table.insert(records, "absent")
+  end
   local loaded, config = pcall(require, "lazy.core.config")
   if vim.g.lazy_did_setup and loaded then
     table.insert(records, "lazy")
@@ -399,22 +441,22 @@ LUA
     _dr_skip "nvim startup probe" "could not write the probe script"
     return 0
   fi
-  # Private state and cache directories keep the short-lived instance out of
-  # the user's editor state: Lazy caches, logs, sessions, Lua bytecode keyed
-  # by these temporary paths, and the Termnav editor registry, which would
-  # otherwise briefly advertise this instance. Without TMUX, Termnav makes no
+  # The runner's private state and cache directories keep the short-lived
+  # instance out of the user's editor state: Lazy caches, logs, sessions, Lua
+  # bytecode keyed by temporary paths, and the Termnav editor registry, which
+  # would otherwise briefly advertise this instance. The data directory stays
+  # real because the installed plugins live there. Without TMUX, Termnav makes no
   # tmux queries; doctor workers run in their own session, so its fallback
   # terminal write to /dev/tty has no terminal to reach. GIT_ALLOW_PROTOCOL
   # makes any clone or fetch fail at once even if another overlay's
   # config.lazy ignores plugin_install_disabled.
-  if ! mkdir "$probe_dir/state" "$probe_dir/cache" 2>/dev/null; then
+  DOT_NVIM_MIN_VERSION=$_DR_NVIM_MIN_VERSION GIT_ALLOW_PROTOCOL=file GIT_TERMINAL_PROMPT=0 \
+    _dr_nvim_probe "$probe_dir" "$probe_dir/probe.lua"
+  if [[ $REPLY == no-tmpdir ]]; then
     rm -rf "$probe_dir" 2>/dev/null || true
     _dr_skip "nvim startup probe" "could not create temp directory"
     return 0
   fi
-  XDG_STATE_HOME=$probe_dir/state XDG_CACHE_HOME=$probe_dir/cache \
-    GIT_ALLOW_PROTOCOL=file GIT_TERMINAL_PROMPT=0 \
-    _dr_nvim_probe "$probe_dir" "$probe_dir/probe.lua"
   if [[ $REPLY == timeout ]]; then
     rm -rf "$probe_dir" 2>/dev/null || true
     _dr_warn "nvim startup probe timed out" \
@@ -432,6 +474,8 @@ LUA
   while IFS=$'\t' read -r kind value; do
     case $kind in
       updating) updating=1 ;;
+      old) too_old=1 ;;
+      absent) absent=1 ;;
       stale) stale_lock=$value ;;
       internal)
         rm -rf "$probe_dir" 2>/dev/null || true
@@ -451,11 +495,19 @@ LUA
   done <"$probe_dir/result"
   rm -rf "$probe_dir" 2>/dev/null || true
 
-  if [[ -n $stale_lock ]]; then
+  if ((too_old)); then
+    _dr_warn "nvim too old for this config" \
+      "LazyVim needs Neovim $_DR_NVIM_MIN_VERSION or newer; startup probe skipped"
+  elif [[ -n $stale_lock ]]; then
     _dr_warn "stale Lazy update lock" \
       "$(dot_doctor_display_path "$stale_lock"); nvim waits on it at every start; remove it unless an update is running"
   elif ((updating)); then
     _dr_skip "nvim startup probe" "a scheduled Lazy plugin update is running"
+  elif ((absent)); then
+    # Config that needs Lazy fails without it; that is the first-run state,
+    # not a config error. This assumes nothing after `require("config.lazy")`
+    # runs independently of Lazy, which holds for init.lua here.
+    _dr_skip "nvim startup probe" "lazy.nvim is not installed; start nvim once to install plugins"
   elif ((missing > 0)); then
     # Missing plugins cascade into load errors, and the next interactive
     # start installs them, so report the install state rather than a failure.
@@ -472,7 +524,7 @@ LUA
 }
 
 _dr_check_nvim() {
-  local version_output
+  local version_output version_dir
 
   _dr_section "Neovim"
 
@@ -481,11 +533,19 @@ _dr_check_nvim() {
     return 0
   fi
   # Read the version without an early-exiting pipeline: under the worker's
-  # pipefail policy a SIGPIPE in the producer would abort the extension.
-  if ! version_output=$(nvim --version 2>/dev/null); then
+  # pipefail policy a SIGPIPE in the producer would abort the extension. Even
+  # --version opens Neovim's log, so it too gets private XDG directories.
+  version_dir=$(mktemp -d "${TMPDIR:-/tmp}/dot-nvim-version.XXXXXX" 2>/dev/null) || {
+    _dr_warn "nvim checks could not run" "could not create temp directory"
+    return 0
+  }
+  if ! version_output=$(XDG_STATE_HOME=$version_dir XDG_CACHE_HOME=$version_dir \
+    XDG_DATA_HOME=$version_dir nvim --version 2>/dev/null); then
+    rm -rf "$version_dir" 2>/dev/null || true
     _dr_warn "nvim found but cannot run" "binary may be incompatible with this platform"
     return 0
   fi
+  rm -rf "$version_dir" 2>/dev/null || true
   version_output=${version_output%%$'\n'*}
   _dr_ok "nvim installed" "${version_output#NVIM }"
 

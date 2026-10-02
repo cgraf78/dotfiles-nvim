@@ -6,7 +6,9 @@ local install_disabled = vim.g.plugin_install_disabled == true
 local lazypath = vim.fn.stdpath("data") .. "/lazy/lazy.nvim"
 if not (vim.uv or vim.loop).fs_stat(lazypath) then
   if install_disabled then
-    -- Leave the plugin manager absent; the probe reports that state itself.
+    -- Leave the plugin manager absent and say so: later config that needs
+    -- Lazy will fail, and the probe must read that as "not installed yet".
+    vim.g.plugin_manager_missing = true
     return
   end
   local lazyrepo = "https://github.com/folke/lazy.nvim.git"

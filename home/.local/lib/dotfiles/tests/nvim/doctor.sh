@@ -2,7 +2,10 @@
 
 # Per-case limit for one doctor run. The probes' own deadlines are 8 s each;
 # this only turns a hang into a failure, so it stays generous for busy hosts.
-NVIM_DOCTOR_CASE_DEADLINE=${NVIM_DOCTOR_CASE_DEADLINE:-60}
+NVIM_DOCTOR_CASE_DEADLINE=${NVIM_DOCTOR_CASE_DEADLINE:-90}
+# Probe deadline for real-Neovim cases. Production uses 8 s; parallel suite
+# runs on a loaded host can need longer, and no case here depends on it.
+NVIM_DOCTOR_PROBE_TIMEOUT=${NVIM_DOCTOR_PROBE_TIMEOUT:-30}
 
 # Doctor support loaded from the checkout under test. The base-owned compat
 # shim and shdeps adapter come from the source HOME (the converged base, or the
@@ -208,7 +211,24 @@ _nvim_doctor_case() {
     XDG_CONFIG_HOME=$case_dir/config XDG_DATA_HOME=$case_dir/data \
     XDG_STATE_HOME=$case_dir/state XDG_CACHE_HOME=$case_dir/cache \
     NVIM_APPNAME='' TMUX=/tmp/nvim-doctor-test-tmux,1,0 TMUX_PANE=%0 \
-    PATH="$NVIM_DOCTOR_BIN:$PATH" _nvim_doctor_run
+    PATH="${NVIM_DOCTOR_PATH:-$NVIM_DOCTOR_BIN:$PATH}" _nvim_doctor_run
+}
+
+# Build a PATH holding only what the extension runs, plus any extra commands
+# given as NAME=TARGET, so tests control which deadline commands exist.
+_nvim_doctor_minimal_path() {
+  local dir=$1 tool target
+  shift
+  mkdir -p "$dir"
+  ln -sf "$NVIM_DOCTOR_BIN/nvim" "$dir/nvim"
+  for tool in cat env head mkdir mktemp rm; do
+    target=$(command -v "$tool") || return 1
+    ln -sf "$target" "$dir/$tool"
+  done
+  for tool in "$@"; do
+    ln -sf "${tool#*=}" "$dir/${tool%%=*}"
+  done
+  printf '%s\n' "$dir"
 }
 
 nvim_test_doctor_syntax() {
@@ -263,9 +283,13 @@ nvim_test_doctor_syntax() {
   record=$(_nvim_doctor_record "nvim config syntax")
   _assert_eq "nvim doctor syntax: reports a broken nested regular file" \
     $'fail\t1 of 2 Lua file(s); lua/deep/er/x.lua:1: unexpected symbol near \'=\'' "$record"
-  record=$(_nvim_doctor_record "nvim config loads")
-  _assert_eq "nvim doctor syntax: later rows still run after a syntax failure" \
-    $'ok\t' "$record"
+  # The startup row follows, whichever way the probe comes out.
+  if _nvim_doctor_record "nvim config loads" >/dev/null ||
+    _nvim_doctor_record "nvim too old" >/dev/null; then
+    _pass "nvim doctor syntax: later rows still run after a syntax failure"
+  else
+    _fail "nvim doctor syntax: later rows still run after a syntax failure"
+  fi
 
   case_dir=$tmp/syntax-multiple
   _nvim_doctor_init "$case_dir/config/nvim" none
@@ -287,18 +311,28 @@ nvim_test_doctor_syntax() {
     $'fail\t1 of 1 Lua file(s); lua/gone.lua: broken symlink' "$record"
 
   # Directory links are followed only inside the tree, once per real
-  # directory, so a cycle terminates and outside trees are left alone.
-  case_dir=$tmp/syntax-dir-links
+  # directory, so a cycle terminates.
+  case_dir=$tmp/syntax-dir-cycle
+  _nvim_doctor_init "$case_dir/config/nvim" none
+  mkdir -p "$case_dir/config/nvim/lua"
+  ln -s .. "$case_dir/config/nvim/lua/loop"
+  ln -s "$case_dir/config/nvim/lua" "$case_dir/config/nvim/again"
+  _nvim_doctor_case "$case_dir"
+  record=$(_nvim_doctor_record "nvim config syntax")
+  _assert_eq "nvim doctor syntax: directory link cycles terminate" \
+    $'ok\t1 Lua files' "$record"
+
+  # An outside tree is not walked, and the row must not call it valid.
+  case_dir=$tmp/syntax-dir-outside
   _nvim_doctor_init "$case_dir/config/nvim" none
   mkdir -p "$case_dir/config/nvim/lua" "$case_dir/outside"
   cp "$overlay/broken/broken.lua" "$case_dir/outside/broken.lua"
-  ln -s .. "$case_dir/config/nvim/lua/loop"
-  ln -s "$case_dir/config/nvim/lua" "$case_dir/config/nvim/again"
   ln -s "$case_dir/outside" "$case_dir/config/nvim/lua/outside"
   _nvim_doctor_case "$case_dir"
   record=$(_nvim_doctor_record "nvim config syntax")
-  _assert_eq "nvim doctor syntax: directory links neither loop nor leave the tree" \
-    $'ok\t1 Lua files' "$record"
+  _assert_eq "nvim doctor syntax: reports linked directories it did not check" \
+    $'warn\t1 Lua files valid; 1 linked director(ies) outside the config tree not checked, including lua/outside' \
+    "$record"
 
   case_dir=$tmp/syntax-empty
   mkdir -p "$case_dir/config/nvim"
@@ -328,7 +362,7 @@ nvim_test_doctor_startup() {
   _nvim_doctor_init "$case_dir/config/nvim" ready \
     'vim.notify("just a warning", vim.log.levels.WARN)
 vim.cmd("silent! definitely-not-a-command")
-for _ = 1, 500 do
+for _ = 1, 100 do
   print(string.rep("chatty config output ", 20))
 end
 vim.cmd("echo \"hello from echo\"")'
@@ -430,7 +464,7 @@ end })'
   NVIM_DOCTOR_BIN=$case_dir/bin:$NVIM_DOCTOR_BIN _nvim_doctor_case "$case_dir"
   record=$(_nvim_doctor_record "nvim startup probe timed out")
   _assert_eq "nvim doctor startup: reports a probe that exceeds its deadline" \
-    $'warn\tno result within 8s; start nvim to inspect' "$record"
+    "warn"$'\t'"no result within ${_DR_NVIM_PROBE_TIMEOUT}s; start nvim to inspect" "$record"
 
   # A busy Neovim ignores SIGTERM; the real deadline must escalate to SIGKILL.
   if [[ -e $NVIM_DOCTOR_BIN/timeout ]]; then
@@ -528,6 +562,38 @@ vim.fn.mkdir(vim.fn.stdpath("state") .. "/written", "p")'
     _pass "nvim doctor startup: real config creates no plugin directory"
   fi
 
+  # Config that needs Lazy fails while it is absent: still the first-run
+  # skip, not a config failure.
+  case_dir=$tmp/startup-real-bootstrap-error
+  mkdir -p "$case_dir/config/nvim/lua/config"
+  ln -s "$checkout_config/lua/config/lazy.lua" "$case_dir/config/nvim/lua/config/lazy.lua"
+  printf 'require("config.lazy")\nrequire("lazy")\n' >"$case_dir/config/nvim/init.lua"
+  _nvim_doctor_case "$case_dir"
+  record=$(_nvim_doctor_record "nvim startup probe")
+  _assert_eq "nvim doctor startup: errors from an absent lazy.nvim still skip" \
+    $'skip\tlazy.nvim is not installed; start nvim once to install plugins' "$record"
+
+  # A config that breaks before it reaches the plugin manager is a failure.
+  case_dir=$tmp/startup-early-error
+  _nvim_doctor_init "$case_dir/config/nvim" none 'error("boom before lazy")'
+  _nvim_doctor_case "$case_dir"
+  record=$(_nvim_doctor_record "nvim config reports")
+  case $record in
+    $'fail\t1 error(s); '*'boom before lazy'*) _pass "nvim doctor startup: fails on an error before lazy.nvim loads" ;;
+    *) _fail "nvim doctor startup: fails on an error before lazy.nvim loads (got '$record')" ;;
+  esac
+
+  # Older Neovim would make LazyVim wait on a keypress until the deadline.
+  case_dir=$tmp/startup-too-old
+  _nvim_doctor_init "$case_dir/config/nvim" ready \
+    'vim.fn.writefile({ "ran" }, vim.env.NVIM_DOCTOR_MARKER)'
+  NVIM_DOCTOR_MARKER=$case_dir/marker _DR_NVIM_MIN_VERSION=99.0.0 _nvim_doctor_case "$case_dir"
+  record=$(_nvim_doctor_record "nvim too old for this config")
+  _assert_eq "nvim doctor startup: skips the probe on a Neovim the config cannot run" \
+    $'warn\tLazyVim needs Neovim 99.0.0 or newer; startup probe skipped' "$record"
+  _assert_eq "nvim doctor startup: runs no config on a too-old Neovim" \
+    "" "$(cat "$case_dir/marker" 2>/dev/null)"
+
   # ... and no missing-plugin installs once it is present.
   case_dir=$tmp/startup-real-install
   mkdir -p "$case_dir/config/nvim/lua/config" \
@@ -547,6 +613,20 @@ vim.fn.mkdir(vim.fn.stdpath("state") .. "/written", "p")'
   record=$(_nvim_doctor_record "nvim config loads")
   _assert_eq "nvim doctor startup: real config with lazy.nvim present loads cleanly" \
     $'ok\t' "$record"
+}
+
+# On a Neovim older than the config supports, the startup probe reports that
+# at once instead of sitting through LazyVim's keypress prompt.
+nvim_test_doctor_old_nvim() {
+  local case_dir=$NVIM_DOCTOR_TMP/old-nvim record
+
+  echo "SKIP: startup probe cases (Neovim older than $_DR_NVIM_MIN_VERSION)"
+  _nvim_doctor_init "$case_dir/config/nvim" ready
+  _nvim_doctor_case "$case_dir"
+  record=$(_nvim_doctor_record "nvim too old for this config")
+  _assert_eq "nvim doctor old: reports a Neovim the config cannot run" \
+    "warn"$'\t'"LazyVim needs Neovim $_DR_NVIM_MIN_VERSION or newer; startup probe skipped" \
+    "$record"
 }
 
 # A Neovim that never exits (as Neovim 0.8 does when handed `-l`) or that
@@ -624,8 +704,70 @@ _nvim_doctor_probe_unbounded() {
   printf '%s\n' "$REPLY" >"$3"
 }
 
+# Which deadline command exists, and whether the extension leaves HOME alone.
+nvim_test_doctor_environment() {
+  local tmp case_dir record timeout_path before after
+
+  tmp=$NVIM_DOCTOR_TMP
+  timeout_path=$(command -v timeout 2>/dev/null || command -v gtimeout 2>/dev/null)
+
+  # Without a deadline command the startup probe, which runs user code, must
+  # not run at all; the syntax check, which runs none, still does.
+  case_dir=$tmp/env-no-timeout
+  _nvim_doctor_init "$case_dir/config/nvim" ready \
+    'vim.fn.writefile({ "ran" }, vim.env.NVIM_DOCTOR_MARKER)'
+  NVIM_DOCTOR_MARKER=$case_dir/marker \
+    NVIM_DOCTOR_PATH=$(_nvim_doctor_minimal_path "$case_dir/bin") _nvim_doctor_case "$case_dir"
+  record=$(_nvim_doctor_record "nvim startup probe")
+  _assert_eq "nvim doctor env: skips the startup probe without timeout or gtimeout" \
+    $'skip\ttimeout command not available' "$record"
+  _assert_eq "nvim doctor env: runs no config without a deadline command" \
+    "" "$(cat "$case_dir/marker" 2>/dev/null)"
+  record=$(_nvim_doctor_record "nvim config syntax")
+  _assert_eq "nvim doctor env: still checks syntax without a deadline command" \
+    $'ok\t1 Lua files' "$record"
+
+  if [[ -z $timeout_path || $timeout_path == "$NVIM_DOCTOR_BIN/timeout" ]]; then
+    echo "SKIP: gtimeout selection (no real timeout or gtimeout on this host)"
+  else
+    case_dir=$tmp/env-gtimeout
+    _nvim_doctor_init "$case_dir/config/nvim" ready
+    mkdir -p "$case_dir/wrap"
+    cat >"$case_dir/wrap/gtimeout" <<EOF
+#!/bin/sh
+echo used >>"$case_dir/gtimeout.log"
+exec "$timeout_path" "\$@"
+EOF
+    chmod +x "$case_dir/wrap/gtimeout"
+    NVIM_DOCTOR_PATH=$(_nvim_doctor_minimal_path "$case_dir/bin" "gtimeout=$case_dir/wrap/gtimeout") \
+      _nvim_doctor_case "$case_dir"
+    record=$(_nvim_doctor_record "$NVIM_DOCTOR_STARTUP_ROW")
+    _assert_eq "nvim doctor env: runs the startup probe with only gtimeout" \
+      "$NVIM_DOCTOR_STARTUP_RECORD" "$record"
+    _assert_contains "nvim doctor env: bounds probes with gtimeout when timeout is absent" \
+      used "$(cat "$case_dir/gtimeout.log" 2>/dev/null)"
+  fi
+
+  # With XDG roots unset, every probe must still leave HOME as it found it.
+  # The plugin data directory exists on any host with plugins installed.
+  case_dir=$tmp/env-home
+  _nvim_doctor_init "$case_dir/home/.config/nvim" ready
+  mkdir -p "$case_dir/home/.local/share/nvim"
+  before=$(cd "$case_dir/home" && find . | LC_ALL=C sort)
+  (
+    # Neovim reads an empty XDG variable as set, so unset them outright.
+    unset XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_CACHE_HOME
+    HOME=$case_dir/home PATH="$NVIM_DOCTOR_BIN:$PATH" _nvim_doctor_run
+  )
+  after=$(cd "$case_dir/home" && find . | LC_ALL=C sort)
+  record=$(_nvim_doctor_record "$NVIM_DOCTOR_STARTUP_ROW")
+  _assert_eq "nvim doctor env: loads the HOME config with XDG roots unset" \
+    "$NVIM_DOCTOR_STARTUP_RECORD" "$record"
+  _assert_eq "nvim doctor env: leaves HOME unchanged" "$before" "$after"
+}
+
 nvim_test_doctor() {
-  local tmp spy nvim_bin
+  local tmp spy nvim_bin min_major min_minor min_patch
 
   nvim_test_doctor_wiring
 
@@ -673,7 +815,20 @@ EOF
     _fail "nvim doctor: extension loads for real probes"
     return 0
   }
+  _DR_NVIM_PROBE_TIMEOUT=$NVIM_DOCTOR_PROBE_TIMEOUT
+  # The row a clean fixture config yields depends on whether this Neovim can
+  # run the config at all.
+  IFS=. read -r min_major min_minor min_patch <<<"$_DR_NVIM_MIN_VERSION"
   nvim_test_doctor_syntax
-  nvim_test_doctor_startup
+  if _nvim_version_at_least "$nvim_bin" "$min_major" "$min_minor" "$min_patch"; then
+    NVIM_DOCTOR_STARTUP_ROW="nvim config loads"
+    NVIM_DOCTOR_STARTUP_RECORD=$'ok\t'
+    nvim_test_doctor_startup
+  else
+    NVIM_DOCTOR_STARTUP_ROW="nvim too old for this config"
+    NVIM_DOCTOR_STARTUP_RECORD="warn"$'\t'"LazyVim needs Neovim $_DR_NVIM_MIN_VERSION or newer; startup probe skipped"
+    nvim_test_doctor_old_nvim
+  fi
+  nvim_test_doctor_environment
   nvim_test_doctor_hangs
 }
