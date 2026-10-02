@@ -284,6 +284,17 @@ for command_root in "${system_roots[@]}"; do
     break
   fi
 done
+# The doctor's startup probe bounds Neovim with timeout or gtimeout. Expose
+# whichever the platform ships so the doctor suite exercises the real
+# deadline; it substitutes a pass-through shim where neither exists.
+for command_name in timeout gtimeout; do
+  for command_root in "${system_roots[@]}"; do
+    if [[ -x $command_root/$command_name && ! -d $command_root/$command_name ]]; then
+      ln -s "$command_root/$command_name" "$controlled_bin/$command_name"
+      break
+    fi
+  done
+done
 cat >"$controlled_bin/hostname" <<'EOF'
 #!/bin/sh
 printf 'capability-ci.invalid\n'

@@ -3,6 +3,9 @@ local M = {}
 local uv = vim.uv or vim.loop
 local timeout_ms = 5 * 60 * 1000
 
+-- How long startup waits on the lock; `dot doctor` treats an older lock as stale.
+M.timeout_ms = timeout_ms
+
 --- @return string
 function M.path()
   return vim.fn.stdpath("data") .. "/lazy/lazy.nvim.update.lock"

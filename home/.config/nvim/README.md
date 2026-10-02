@@ -14,6 +14,10 @@ absent. The `dotfiles-dev` overlay contributes language services, debugging,
 AI assistance, formatting, linting, and advanced Git workflows through those
 extension points without replacing this editor configuration.
 
+`dot doctor` loads this configuration headless to report startup errors. It
+sets `vim.g.plugin_install_disabled` first, so `config.lazy` neither clones
+lazy.nvim nor installs missing plugins during the probe.
+
 The editor-owned `nvim-workspace` options use only generic repository markers
 and the tracked dotfiles HOME. Sley discovery and Lazygit routing are additive
 dev-overlay policy.
