@@ -347,7 +347,10 @@ end)'
   _nvim_doctor_case "$case_dir"
   record=$(_nvim_doctor_record "nvim config reports")
   case $record in
-    $'fail\t1 error(s); vim.schedule callback: '*'boom from schedule'*)
+    # Neovim words this message differently by version ("vim.schedule
+    # callback:" vs "Error executing vim.schedule lua callback:"); the
+    # contract is a fail row naming the scheduled error.
+    $'fail\t1 error(s); '*'schedule'*'callback: '*'boom from schedule'*)
       _pass "nvim doctor startup: fails on a scheduled callback error"
       ;;
     *) _fail "nvim doctor startup: fails on a scheduled callback error (got '$record')" ;;
