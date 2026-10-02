@@ -9,10 +9,53 @@
 # Dot also turns any stray worker stderr into an extra warning row, so helper
 # commands here keep their diagnostics to themselves.
 
-# Startup probe deadline, in seconds. A healthy config starts in well under a
+# Per-probe deadline, in seconds. A healthy config starts in well under a
 # second; the margin covers heavily loaded hosts. A busy Neovim can ignore
 # SIGTERM, so the timeout escalates to SIGKILL after a short grace period.
-_DR_NVIM_STARTUP_TIMEOUT=8
+_DR_NVIM_PROBE_TIMEOUT=8
+# timeout(1) or gtimeout, resolved per doctor run; empty when the host has none.
+_DR_NVIM_TIMEOUT_BIN=''
+# Lua run from --cmd to load a probe script; see _dr_nvim_probe.
+_DR_NVIM_PROBE_LOADER='local ok, err = pcall(dofile, vim.env.DOT_NVIM_PROBE_SCRIPT); '
+_DR_NVIM_PROBE_LOADER+='if not ok then io.stderr:write(tostring(err), "\n"); vim.cmd("cquit 3") end'
+
+# Run one headless Neovim probe: DIR SCRIPT [NVIM_ARGS...]. SCRIPT runs from
+# --cmd, writes DIR/result in one step, and quits. Neovim never shares a pipe
+# with doctor (stdin and stdout are /dev/null, stderr goes to DIR/stderr), so
+# a child it leaves behind cannot keep doctor waiting, and timeout(1) bounds
+# the run, killing its whole process group at the deadline. Without a timeout
+# command the probe runs unbounded; only the syntax check, which runs no user
+# code, accepts that. The outer redirection swallows the shell's job notice
+# when the deadline escalates to SIGKILL. A Lua error escaping --cmd would
+# leave headless Neovim waiting for input, so the script loads under pcall
+# and any escaped error quits with status 3, its message on stderr.
+# REPLY: "complete", "timeout", or the exit status of a run that left no result.
+_dr_nvim_probe() {
+  local dir=$1 script=$2 status=0 started=$SECONDS
+  local -a bound=()
+  shift 2
+
+  [[ -z $_DR_NVIM_TIMEOUT_BIN ]] ||
+    bound=("$_DR_NVIM_TIMEOUT_BIN" -k 1 "$_DR_NVIM_PROBE_TIMEOUT")
+  {
+    DOT_NVIM_PROBE_RESULT=$dir/result DOT_NVIM_PROBE_SCRIPT=$script \
+      ${bound[@]+"${bound[@]}"} env -u TMUX -u TMUX_PANE \
+      nvim --headless -i NONE "$@" --cmd "lua $_DR_NVIM_PROBE_LOADER" \
+      </dev/null >/dev/null 2>"$dir/stderr"
+  } 2>/dev/null || status=$?
+
+  # GNU timeout exits 124, or 137 once it escalates to SIGKILL. BusyBox
+  # passes on Neovim's own status, and Neovim exits 1 after catching
+  # SIGTERM, so a run that used up the deadline without a result also counts.
+  if [[ -n $_DR_NVIM_TIMEOUT_BIN ]] && { [[ $status -eq 124 || $status -eq 137 ]] ||
+    [[ ! -f $dir/result && $((SECONDS - started)) -ge $_DR_NVIM_PROBE_TIMEOUT ]]; }; then
+    REPLY=timeout
+  elif [[ -f $dir/result ]]; then
+    REPLY=complete
+  else
+    REPLY=$status
+  fi
+}
 
 # Collapse captured output to the single-line detail the doctor API requires
 # and drop Lua stack traces, which repeat what the first line already says.
@@ -32,110 +75,138 @@ _dr_nvim_one_line() {
 }
 
 _dr_check_nvim_config_syntax() {
-  local query_file output status=0 kind value checked=0 errors=0 first_error=''
+  local probe_dir kind value checked=0 errors=0 first_error=''
 
-  query_file=$(mktemp "${TMPDIR:-/tmp}/dot-nvim-syntax.XXXXXX" 2>/dev/null) || {
-    _dr_warn "nvim config syntax check failed" "could not create temp file"
+  probe_dir=$(mktemp -d "${TMPDIR:-/tmp}/dot-nvim-syntax.XXXXXX" 2>/dev/null) || {
+    _dr_warn "nvim config syntax check failed" "could not create temp directory"
     return 0
   }
   # Compile every Lua file in the config tree without executing it. Overlays
   # install config files as symlinks into their checkouts, so file links are
   # followed wherever they point. Directory links are followed only while they
   # resolve inside the config tree, and each real directory is walked once, so
-  # a link cycle or a link to a large outside tree cannot stall doctor.
-  if ! cat 2>/dev/null >"$query_file" <<'LUA'
+  # a link cycle or a link to a large outside tree cannot stall doctor. The
+  # script runs from --cmd rather than `nvim -l`, which Neovim before 0.9
+  # reads as Lisp mode plus a file to edit, waiting forever when headless.
+  if ! cat 2>/dev/null >"$probe_dir/syntax.lua" <<'LUA'
 local uv = vim.uv or vim.loop
-local root = vim.fn.stdpath("config")
-local real_root = uv.fs_realpath(root)
-if not real_root then
-  io.stdout:write("absent\n")
-  return
-end
-
-local checked, seen = 0, {}
+local records = {}
 
 local function emit(kind, value)
-  io.stdout:write(kind, "\t", (value:gsub("%c", " ")), "\n")
+  table.insert(records, kind .. "\t" .. tostring(value):gsub("%c", " "))
 end
 
-local function inside(real)
-  return real == real_root or real:sub(1, #real_root + 1) == real_root .. "/"
-end
-
--- Name the chunk after its config-relative path so messages stay short and
--- point at the file the user edits rather than an overlay checkout.
-local function compile(path, display)
-  local file, open_err = io.open(path, "rb")
-  if not file then
-    return display .. ": " .. tostring(open_err)
-  end
-  local source = file:read("*a")
-  file:close()
-  -- loadfile() ignores a leading #! line; blank it but keep line numbers.
-  source = source:gsub("^#[^\n]*", "")
-  -- PUC Lua 5.1 builds accept only a function in load(); LuaJIT has both.
-  local _, err = (loadstring or load)(source, "@" .. display)
-  return err
-end
-
-local function walk(dir, prefix)
-  local real = uv.fs_realpath(dir)
-  if not real or seen[real] or not inside(real) then
+local function check()
+  local root = vim.fn.stdpath("config")
+  local real_root = uv.fs_realpath(root)
+  if not real_root then
+    emit("absent", "")
     return
   end
-  seen[real] = true
-  local entries = {}
-  for name, kind in vim.fs.dir(dir) do
-    table.insert(entries, { name = name, kind = kind })
+
+  local checked, seen = 0, {}
+
+  local function inside(real)
+    return real == real_root or real:sub(1, #real_root + 1) == real_root .. "/"
   end
-  table.sort(entries, function(a, b)
-    return a.name < b.name
-  end)
-  for _, entry in ipairs(entries) do
-    local path, display, kind = dir .. "/" .. entry.name, prefix .. entry.name, entry.kind
-    if kind ~= "file" and kind ~= "directory" then
-      -- Symlinks, and entries whose type readdir did not report.
-      local stat = uv.fs_stat(path)
-      kind = stat and stat.type or "missing"
+
+  -- Name the chunk after its config-relative path so messages stay short and
+  -- point at the file the user edits rather than an overlay checkout.
+  local function compile(path, display)
+    local file, open_err = io.open(path, "rb")
+    if not file then
+      return display .. ": " .. tostring(open_err)
     end
-    if kind == "directory" then
-      if entry.name ~= ".git" then
-        walk(path, display .. "/")
+    local source = file:read("*a")
+    file:close()
+    -- loadfile() ignores a leading #! line; blank it but keep line numbers.
+    source = source:gsub("^#[^\n]*", "")
+    -- PUC Lua 5.1 builds accept only a function in load(); LuaJIT has both.
+    local _, err = (loadstring or load)(source, "@" .. display)
+    return err
+  end
+
+  local function walk(dir, prefix)
+    local real = uv.fs_realpath(dir)
+    if not real or seen[real] or not inside(real) then
+      return
+    end
+    seen[real] = true
+    local entries = {}
+    for name, kind in vim.fs.dir(dir) do
+      table.insert(entries, { name = name, kind = kind })
+    end
+    table.sort(entries, function(a, b)
+      return a.name < b.name
+    end)
+    for _, entry in ipairs(entries) do
+      local path, display, kind = dir .. "/" .. entry.name, prefix .. entry.name, entry.kind
+      if kind ~= "file" and kind ~= "directory" then
+        -- Symlinks, and entries whose type readdir did not report.
+        local stat = uv.fs_stat(path)
+        kind = stat and stat.type or "missing"
       end
-    elseif entry.name:sub(-4) == ".lua" then
-      if kind == "file" then
-        checked = checked + 1
-        local err = compile(path, display)
-        if err then
-          emit("error", err)
+      if kind == "directory" then
+        if entry.name ~= ".git" then
+          walk(path, display .. "/")
         end
-      elseif kind == "missing" then
-        emit("error", display .. ": broken symlink")
+      elseif entry.name:sub(-4) == ".lua" then
+        if kind == "file" then
+          checked = checked + 1
+          local err = compile(path, display)
+          if err then
+            emit("error", err)
+          end
+        elseif kind == "missing" then
+          emit("error", display .. ": broken symlink")
+        end
       end
     end
   end
+
+  walk(root, "")
+  emit("checked", checked)
 end
 
-walk(root, "")
-emit("checked", tostring(checked))
+-- Always publish a result and quit, even if the walk itself fails.
+local ok, err = pcall(check)
+if not ok then
+  emit("internal", err)
+end
+vim.fn.writefile(records, vim.env.DOT_NVIM_PROBE_RESULT)
+vim.cmd("qall!")
 LUA
   then
-    rm -f "$query_file" 2>/dev/null || true
+    rm -rf "$probe_dir" 2>/dev/null || true
     _dr_warn "nvim config syntax check failed" "could not write temp file"
     return 0
   fi
-  output=$(nvim --clean --headless -u NONE -i NONE -l "$query_file" \
-    </dev/null 2>/dev/null) || status=$?
-  rm -f "$query_file" 2>/dev/null || true
-  if ((status != 0)); then
-    _dr_warn "nvim config syntax check could not run" "nvim exited with status $status"
-    return 0
-  fi
+  _dr_nvim_probe "$probe_dir" "$probe_dir/syntax.lua" --clean -u NONE
+  case $REPLY in
+    complete) ;;
+    timeout)
+      rm -rf "$probe_dir" 2>/dev/null || true
+      _dr_warn "nvim config syntax check timed out" \
+        "no result within ${_DR_NVIM_PROBE_TIMEOUT}s"
+      return 0
+      ;;
+    *)
+      rm -rf "$probe_dir" 2>/dev/null || true
+      _dr_warn "nvim config syntax check could not run" "nvim exited with status $REPLY"
+      return 0
+      ;;
+  esac
 
   while IFS=$'\t' read -r kind value; do
     case $kind in
       absent)
+        rm -rf "$probe_dir" 2>/dev/null || true
         _dr_skip "nvim config syntax" "configuration directory is absent"
+        return 0
+        ;;
+      internal)
+        rm -rf "$probe_dir" 2>/dev/null || true
+        _dr_warn "nvim config syntax check could not run" "$(_dr_nvim_one_line "$value")"
         return 0
         ;;
       checked) checked=$value ;;
@@ -144,7 +215,8 @@ LUA
         [[ -n $first_error ]] || first_error=$value
         ;;
     esac
-  done <<<"$output"
+  done <"$probe_dir/result"
+  rm -rf "$probe_dir" 2>/dev/null || true
 
   if ((errors > 0)); then
     _dr_fail "nvim config syntax errors" \
@@ -157,14 +229,11 @@ LUA
 }
 
 _dr_check_nvim_startup() {
-  local timeout_bin probe_dir status=0 started kind value stderr_text
+  local probe_dir kind value stderr_text
   local updating=0 stale_lock='' lazy_ready=0 missing=0 first_missing='' errors=0 first_error=''
 
-  if command -v timeout >/dev/null 2>&1; then
-    timeout_bin=timeout
-  elif command -v gtimeout >/dev/null 2>&1; then
-    timeout_bin=gtimeout
-  else
+  # Unlike the syntax check, this runs user code, so it needs a deadline.
+  if [[ -z $_DR_NVIM_TIMEOUT_BIN ]]; then
     _dr_skip "nvim startup probe" "timeout command not available"
     return 0
   fi
@@ -247,23 +316,30 @@ local function notify(msg, level)
     record_error(msg)
   end
 end
-rawset(vim, "notify", nil)
 local meta = getmetatable(vim)
-local index, newindex = meta.__index, meta.__newindex
-meta.__index = function(tbl, key)
-  if key == "notify" then
-    return notify
-  end
-  return index(tbl, key)
+if type(meta) ~= "table" or type(meta.__index) ~= "function" then
+  -- No hook point on this Neovim: fall back to a plain, replaceable recorder.
+  vim.notify = notify
+  meta = nil
 end
-meta.__newindex = function(tbl, key, value)
-  if key == "notify" then
-    return
+local index, newindex = meta and meta.__index, meta and meta.__newindex
+if meta then
+  rawset(vim, "notify", nil)
+  meta.__index = function(tbl, key)
+    if key == "notify" then
+      return notify
+    end
+    return index(tbl, key)
   end
-  if newindex then
-    return newindex(tbl, key, value)
+  meta.__newindex = function(tbl, key, value)
+    if key == "notify" then
+      return
+    end
+    if newindex then
+      return newindex(tbl, key, value)
+    end
+    rawset(tbl, key, value)
   end
-  rawset(tbl, key, value)
 end
 
 local function finish()
@@ -275,7 +351,8 @@ local function finish()
   -- way; Neovim offers no structured record of earlier ones.
   local errmsg = vim.v.errmsg
   if errmsg ~= "" then
-    local shown = vim.api.nvim_exec2("messages", { output = true }).output
+    local shown = vim.api.nvim_exec2 and vim.api.nvim_exec2("messages", { output = true }).output
+      or vim.api.nvim_exec("messages", true)
     if shown:find(errmsg, 1, true) then
       record_error(errmsg)
     end
@@ -304,7 +381,15 @@ vim.api.nvim_create_autocmd("VimEnter", {
   once = true,
   callback = function()
     vim.defer_fn(function()
-      vim.schedule(finish)
+      vim.schedule(function()
+        -- Publish something and quit even if collecting results fails, so a
+        -- probe bug costs one row rather than the whole deadline.
+        local done, err = pcall(finish)
+        if not done then
+          vim.fn.writefile({ "internal\t" .. summarize(err) }, result)
+          vim.cmd("qall!")
+        end
+      end)
     end, 0)
   end,
 })
@@ -327,27 +412,13 @@ LUA
     _dr_skip "nvim startup probe" "could not create temp directory"
     return 0
   fi
-  # The outer redirection swallows the shell's job notice when the deadline
-  # escalates to SIGKILL; Neovim's own stderr is kept for diagnosis.
-  started=$SECONDS
-  {
-    DOT_NVIM_PROBE_RESULT=$probe_dir/result DOT_NVIM_PROBE_SCRIPT=$probe_dir/probe.lua \
-      XDG_STATE_HOME=$probe_dir/state XDG_CACHE_HOME=$probe_dir/cache \
-      GIT_ALLOW_PROTOCOL=file GIT_TERMINAL_PROMPT=0 \
-      "$timeout_bin" -k 1 "$_DR_NVIM_STARTUP_TIMEOUT" \
-      env -u TMUX -u TMUX_PANE \
-      nvim --headless -i NONE --cmd 'lua dofile(vim.env.DOT_NVIM_PROBE_SCRIPT)' \
-      </dev/null >/dev/null 2>"$probe_dir/stderr"
-  } 2>/dev/null || status=$?
-
-  # GNU timeout exits 124, or 137 once it escalates to SIGKILL. BusyBox
-  # passes on Neovim's own status, and Neovim exits 1 after catching
-  # SIGTERM, so a run that used up the deadline without a result also counts.
-  if [[ $status -eq 124 || $status -eq 137 ]] ||
-    [[ ! -f $probe_dir/result && $((SECONDS - started)) -ge $_DR_NVIM_STARTUP_TIMEOUT ]]; then
+  XDG_STATE_HOME=$probe_dir/state XDG_CACHE_HOME=$probe_dir/cache \
+    GIT_ALLOW_PROTOCOL=file GIT_TERMINAL_PROMPT=0 \
+    _dr_nvim_probe "$probe_dir" "$probe_dir/probe.lua"
+  if [[ $REPLY == timeout ]]; then
     rm -rf "$probe_dir" 2>/dev/null || true
     _dr_warn "nvim startup probe timed out" \
-      "no result within ${_DR_NVIM_STARTUP_TIMEOUT}s; start nvim to inspect"
+      "no result within ${_DR_NVIM_PROBE_TIMEOUT}s; start nvim to inspect"
     return 0
   fi
   if [[ ! -f $probe_dir/result ]]; then
@@ -355,13 +426,18 @@ LUA
     stderr_text=$(head -c 1000 "$probe_dir/stderr" 2>/dev/null) || stderr_text=''
     stderr_text=$(_dr_nvim_one_line "$stderr_text")
     rm -rf "$probe_dir" 2>/dev/null || true
-    _dr_fail "nvim exited during startup" "status $status${stderr_text:+; $stderr_text}"
+    _dr_fail "nvim exited during startup" "status $REPLY${stderr_text:+; $stderr_text}"
     return 0
   fi
   while IFS=$'\t' read -r kind value; do
     case $kind in
       updating) updating=1 ;;
       stale) stale_lock=$value ;;
+      internal)
+        rm -rf "$probe_dir" 2>/dev/null || true
+        _dr_warn "nvim startup probe could not run" "$(_dr_nvim_one_line "$value")"
+        return 0
+        ;;
       lazy) lazy_ready=1 ;;
       missing)
         missing=$((missing + 1))
@@ -412,6 +488,13 @@ _dr_check_nvim() {
   fi
   version_output=${version_output%%$'\n'*}
   _dr_ok "nvim installed" "${version_output#NVIM }"
+
+  _DR_NVIM_TIMEOUT_BIN=''
+  if command -v timeout >/dev/null 2>&1; then
+    _DR_NVIM_TIMEOUT_BIN=timeout
+  elif command -v gtimeout >/dev/null 2>&1; then
+    _DR_NVIM_TIMEOUT_BIN=gtimeout
+  fi
 
   # Neither probe may bootstrap plugins or tools, or reach the network:
   # doctor must stay diagnostic and fast on a freshly activated editor

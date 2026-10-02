@@ -1,5 +1,9 @@
 # shellcheck shell=bash
 
+# Per-case limit for one doctor run. The probes' own deadlines are 8 s each;
+# this only turns a hang into a failure, so it stays generous for busy hosts.
+NVIM_DOCTOR_CASE_DEADLINE=${NVIM_DOCTOR_CASE_DEADLINE:-60}
+
 # Doctor support loaded from the checkout under test. The base-owned compat
 # shim and shdeps adapter come from the source HOME (the converged base, or the
 # capability fixture's stub), since this overlay does not ship them.
@@ -70,13 +74,38 @@ _nvim_doctor_load() {
 # in DOT_DOCTOR_RESULT_FILE; NVIM_DOCTOR_RC holds the worker status. Anything
 # else the worker prints goes to DOT_DOCTOR_RESULT_FILE.out, since Dot turns
 # such output into an extra warning row.
+#
+# The worker gets its own process group and a deadline, so a probe that hangs
+# fails this case (status 124) instead of stalling the suite; the group is
+# killed afterwards either way. GNU timeout(1) moves its child into a group of
+# its own, so a fixture that leaves a process behind must clean it up itself.
+# Arguments, if any, replace `doctor` as the command to run.
 _nvim_doctor_run() {
+  local pid ticks=0 limit=$((NVIM_DOCTOR_CASE_DEADLINE * 10))
+  (($# > 0)) || set -- doctor
   : >"$DOT_DOCTOR_RESULT_FILE"
+  set -m
   (
     set -euo pipefail
-    doctor
-  ) >"$DOT_DOCTOR_RESULT_FILE.out" 2>&1
-  NVIM_DOCTOR_RC=$?
+    "$@"
+  ) </dev/null >"$DOT_DOCTOR_RESULT_FILE.out" 2>&1 &
+  pid=$!
+  set +m
+  while kill -0 "$pid" 2>/dev/null && ((ticks < limit)); do
+    sleep 0.1
+    ticks=$((ticks + 1))
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    kill -KILL -- "-$pid" 2>/dev/null
+    wait "$pid" 2>/dev/null
+    NVIM_DOCTOR_RC=124
+    _fail "nvim doctor: worker finishes within ${NVIM_DOCTOR_CASE_DEADLINE}s"
+  else
+    wait "$pid"
+    NVIM_DOCTOR_RC=$?
+  fi
+  kill -KILL -- "-$pid" 2>/dev/null
+  return 0
 }
 
 # Print the first record whose label starts with PREFIX as KIND<TAB>DETAIL.
@@ -125,9 +154,13 @@ EOF
     $'ok\tnvim installed\tv0.11.0' "$output"
   _assert_not_contains "nvim doctor: emits no development LSP check" 'LSP' "$output"
   _assert_not_contains "nvim doctor: never runs checkhealth" 'checkhealth' "$(cat "$nvim_log")"
+  # Neovim before 0.9 reads `-l` as Lisp mode plus a file to edit. An awk
+  # `exit` still runs END, so failures are carried in `bad`.
   if awk '
-    / -l / && (!/--clean/ || !/-u NONE/ || !/-i NONE/) { exit 1 }
-    /--cmd/ && !/-i NONE/ { exit 1 }
+    /--version/ { next }
+    / -l / || !/-i NONE/ || !/--cmd/ { bad = 1; exit }
+    /--clean/ { syntax = 1; if (!/-u NONE/) { bad = 1; exit } }
+    END { exit bad || !syntax }
   ' "$nvim_log"; then
     _pass "nvim doctor: probes keep ShaDa off and syntax checks run no config"
   else
@@ -405,7 +438,7 @@ end })'
   else
     case_dir=$tmp/startup-hang
     _nvim_doctor_init "$case_dir/config/nvim" ready 'while true do end'
-    _DR_NVIM_STARTUP_TIMEOUT=1 _nvim_doctor_case "$case_dir"
+    _DR_NVIM_PROBE_TIMEOUT=1 _nvim_doctor_case "$case_dir"
     record=$(_nvim_doctor_record "nvim startup probe timed out")
     _assert_eq "nvim doctor startup: stops a hung config at the deadline" \
       $'warn\tno result within 1s; start nvim to inspect' "$record"
@@ -419,7 +452,7 @@ end })'
   mkdir -p "$case_dir/bin"
   printf '#!/bin/sh\nsleep 1\nexit 1\n' >"$case_dir/bin/timeout"
   chmod +x "$case_dir/bin/timeout"
-  NVIM_DOCTOR_BIN=$case_dir/bin:$NVIM_DOCTOR_BIN _DR_NVIM_STARTUP_TIMEOUT=1 \
+  NVIM_DOCTOR_BIN=$case_dir/bin:$NVIM_DOCTOR_BIN _DR_NVIM_PROBE_TIMEOUT=1 \
     _nvim_doctor_case "$case_dir"
   record=$(_nvim_doctor_record "nvim startup probe timed out")
   _assert_eq "nvim doctor startup: treats a run that used up the deadline as a timeout" \
@@ -516,6 +549,81 @@ vim.fn.mkdir(vim.fn.stdpath("state") .. "/written", "p")'
     $'ok\t' "$record"
 }
 
+# A Neovim that never exits (as Neovim 0.8 does when handed `-l`) or that
+# leaves a child holding its output must not stall doctor.
+nvim_test_doctor_hangs() {
+  local tmp case_dir record
+
+  tmp=$NVIM_DOCTOR_TMP
+
+  if [[ -e $NVIM_DOCTOR_BIN/timeout ]]; then
+    echo "SKIP: hung Neovim probes (no timeout or gtimeout on this host)"
+  else
+    case_dir=$tmp/hang-nvim
+    mkdir -p "$case_dir/bin" "$case_dir/config/nvim"
+    printf 'return {}\n' >"$case_dir/config/nvim/init.lua"
+    cat >"$case_dir/bin/nvim" <<'EOF'
+#!/bin/sh
+case " $* " in
+  *' --version '*) printf 'NVIM v0.8.0\n'; exit 0 ;;
+esac
+exec sleep 600
+EOF
+    chmod +x "$case_dir/bin/nvim"
+    NVIM_DOCTOR_BIN=$case_dir/bin:$NVIM_DOCTOR_BIN _DR_NVIM_PROBE_TIMEOUT=1 \
+      NVIM_DOCTOR_CASE_DEADLINE=20 _nvim_doctor_case "$case_dir"
+    _assert_eq "nvim doctor hang: worker finishes when nvim never exits" 0 "$NVIM_DOCTOR_RC"
+    record=$(_nvim_doctor_record "nvim config syntax check timed out")
+    _assert_eq "nvim doctor hang: syntax check stops at its deadline" \
+      $'warn\tno result within 1s' "$record"
+    record=$(_nvim_doctor_record "nvim startup probe timed out")
+    _assert_eq "nvim doctor hang: startup probe stops at its deadline" \
+      $'warn\tno result within 1s; start nvim to inspect' "$record"
+  fi
+
+  case_dir=$tmp/hang-child
+  mkdir -p "$case_dir/bin" "$case_dir/config/nvim"
+  printf 'return {}\n' >"$case_dir/config/nvim/init.lua"
+  cat >"$case_dir/bin/nvim" <<'EOF'
+#!/bin/sh
+case " $* " in
+  *' --version '*) printf 'NVIM v0.8.0\n'; exit 0 ;;
+esac
+sleep 600 &
+echo "$!" >>"$NVIM_DOCTOR_CHILD_PIDS"
+exit 0
+EOF
+  chmod +x "$case_dir/bin/nvim"
+  NVIM_DOCTOR_BIN=$case_dir/bin:$NVIM_DOCTOR_BIN NVIM_DOCTOR_CASE_DEADLINE=20 \
+    NVIM_DOCTOR_CHILD_PIDS=$case_dir/child-pids _nvim_doctor_case "$case_dir"
+  # shellcheck disable=SC2046 # One PID per line.
+  kill $(cat "$case_dir/child-pids" 2>/dev/null) 2>/dev/null
+  _assert_eq "nvim doctor hang: a child left behind by nvim does not stall the worker" \
+    0 "$NVIM_DOCTOR_RC"
+  record=$(_nvim_doctor_record "nvim config syntax check could not run")
+  _assert_eq "nvim doctor hang: a probe without a result reports why" \
+    $'warn\tnvim exited with status 0' "$record"
+
+  # A script error that escapes the probe would otherwise leave headless
+  # Neovim waiting for input; run unbounded to prove it quits on its own.
+  case_dir=$tmp/hang-script-error
+  mkdir -p "$case_dir/probe"
+  printf 'error("boom from probe script")\n' >"$case_dir/probe/bad.lua"
+  NVIM_DOCTOR_CASE_DEADLINE=20 _nvim_doctor_run _nvim_doctor_probe_unbounded \
+    "$case_dir/probe" "$case_dir/probe/bad.lua" "$case_dir/reply"
+  _assert_eq "nvim doctor hang: an escaped probe script error quits Neovim" \
+    3 "$(cat "$case_dir/reply" 2>/dev/null)"
+  _assert_contains "nvim doctor hang: an escaped probe script error is kept on stderr" \
+    'boom from probe script' "$(cat "$case_dir/probe/stderr" 2>/dev/null)"
+}
+
+# Run one probe with no deadline and save REPLY: DIR SCRIPT REPLY_FILE.
+_nvim_doctor_probe_unbounded() {
+  PATH="$NVIM_DOCTOR_BIN:$PATH" _DR_NVIM_TIMEOUT_BIN='' \
+    _dr_nvim_probe "$1" "$2" --clean -u NONE
+  printf '%s\n' "$REPLY" >"$3"
+}
+
 nvim_test_doctor() {
   local tmp spy nvim_bin
 
@@ -567,4 +675,5 @@ EOF
   }
   nvim_test_doctor_syntax
   nvim_test_doctor_startup
+  nvim_test_doctor_hangs
 }
