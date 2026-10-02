@@ -1,5 +1,16 @@
+-- Diagnostic probes such as `dot doctor` set this before init.lua to load only
+-- what is already installed: no bootstrap clone and no missing-plugin installs,
+-- so the probe never reaches the network or writes plugin state.
+local install_disabled = vim.g.plugin_install_disabled == true
+
 local lazypath = vim.fn.stdpath("data") .. "/lazy/lazy.nvim"
 if not (vim.uv or vim.loop).fs_stat(lazypath) then
+  if install_disabled then
+    -- Leave the plugin manager absent and say so: later config that needs
+    -- Lazy will fail, and the probe must read that as "not installed yet".
+    vim.g.plugin_manager_missing = true
+    return
+  end
   local lazyrepo = "https://github.com/folke/lazy.nvim.git"
   local out =
     vim.fn.system({ "git", "clone", "--filter=blob:none", "--branch=stable", lazyrepo, lazypath })
@@ -37,7 +48,7 @@ require("lazy").setup({
     version = false, -- always use the latest git commit
     -- version = "*", -- try installing the latest stable version for plugins that support semver
   },
-  install = { colorscheme = { "tokyonight", "habamax" } },
+  install = { missing = not install_disabled, colorscheme = { "tokyonight", "habamax" } },
   rocks = {
     -- No current plugin uses Lazy's rockspec support, so keep hererocks/luarocks
     -- out of startup and health checks until a plugin actually needs it.
