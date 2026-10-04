@@ -6,6 +6,12 @@ NVIM_DOCTOR_CASE_DEADLINE=${NVIM_DOCTOR_CASE_DEADLINE:-90}
 # Probe deadline for real-Neovim cases. Production uses 8 s; parallel suite
 # runs on a loaded host can need longer, and no case here depends on it.
 NVIM_DOCTOR_PROBE_TIMEOUT=${NVIM_DOCTOR_PROBE_TIMEOUT:-30}
+# The case runner's deadline poll pauses through sleep(1), resolved once here
+# from the suite's own PATH. Cases call the runner under a narrowed PATH that
+# holds only what the extension may run, and the poll must not depend on it:
+# an unresolvable pause turns the poll into a busy spin that both floods the
+# log and shrinks the deadline to a tick count.
+NVIM_DOCTOR_SLEEP=$(type -P sleep) || NVIM_DOCTOR_SLEEP='sleep'
 
 # Doctor support loaded from the checkout under test. The base-owned compat
 # shim and shdeps adapter come from the source HOME (the converged base, or the
@@ -95,7 +101,7 @@ _nvim_doctor_run() {
   pid=$!
   set +m
   while kill -0 "$pid" 2>/dev/null && ((ticks < limit)); do
-    sleep 0.1
+    "$NVIM_DOCTOR_SLEEP" 0.1
     ticks=$((ticks + 1))
   done
   if kill -0 "$pid" 2>/dev/null; then
@@ -766,10 +772,37 @@ EOF
   _assert_eq "nvim doctor env: leaves HOME unchanged" "$before" "$after"
 }
 
+# The case runner's deadline poll must keep waiting when a case narrows PATH
+# to the extension's own commands. A poll that resolves its pause through that
+# PATH spins instead, prints `command not found` per tick, and turns the
+# deadline into a tick count that a healthy but slower worker can exceed.
+nvim_test_doctor_run_deadline() {
+  local tmp sleep_bin err rc
+  local -x DOT_DOCTOR_RESULT_FILE
+  tmp=$(_tmpdir)
+  sleep_bin=$(type -P sleep) || {
+    _fail "nvim doctor run: host provides sleep(1)"
+    return
+  }
+  mkdir -p "$tmp/empty-bin"
+  err=$tmp/run.err
+  DOT_DOCTOR_RESULT_FILE=$tmp/results.tsv
+  # Fifty ticks of the deadline, while the worker needs one second: a spinning
+  # poll burns through them in milliseconds, and only one that really pauses
+  # between ticks lets the worker finish. The margin absorbs a loaded host.
+  NVIM_DOCTOR_CASE_DEADLINE=5 PATH=$tmp/empty-bin \
+    _nvim_doctor_run "$sleep_bin" 1 2>"$err"
+  rc=$NVIM_DOCTOR_RC
+  _assert_eq "nvim doctor run: a minimal PATH keeps the deadline in seconds" 0 "$rc"
+  _assert_eq "nvim doctor run: the deadline poll needs nothing from the case PATH" \
+    "" "$(cat "$err")"
+}
+
 nvim_test_doctor() {
   local tmp spy nvim_bin min_major min_minor min_patch
 
   nvim_test_doctor_wiring
+  nvim_test_doctor_run_deadline
 
   if ! _has_compatible_libc; then
     echo "SKIP: real Neovim doctor probes (requires glibc-compatible Linux libc)"
