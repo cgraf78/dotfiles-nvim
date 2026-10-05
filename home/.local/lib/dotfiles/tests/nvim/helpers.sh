@@ -257,8 +257,7 @@ _test_load_dot_merge_api() {
   dot_root=$(_test_dot_root) || return 1
   DOT_SOURCE_ROOT=$dot_root
   DOT_EXTENSIONS_DIR=$source_home/.local/lib/dotfiles
-  DOT_EXTENSION_API=1
-  export DOT_SOURCE_ROOT DOT_EXTENSIONS_DIR DOT_EXTENSION_API
+  export DOT_SOURCE_ROOT DOT_EXTENSIONS_DIR
 
   # shellcheck source=/dev/null
   . "$dot_root/lib/dot/public/xdg.sh"
@@ -292,9 +291,8 @@ _test_load_dot_doctor_api() {
   dot_root=$(_test_dot_root) || return 1
   DOT_SOURCE_ROOT=$dot_root
   DOT_EXTENSIONS_DIR=$extension_home/.local/lib/dotfiles
-  DOT_EXTENSION_API=1
   DOT_DOCTOR_RESULT_FILE=${DOT_DOCTOR_RESULT_FILE:-$extension_home/.doctor-results.tsv}
-  export DOT_SOURCE_ROOT DOT_EXTENSIONS_DIR DOT_EXTENSION_API
+  export DOT_SOURCE_ROOT DOT_EXTENSIONS_DIR
   export DOT_DOCTOR_RESULT_FILE
   : >"$DOT_DOCTOR_RESULT_FILE"
 
@@ -370,110 +368,6 @@ _test_prefer_system_git() {
   return 1
 }
 
-# Core/bootstrap suites need the current shdeps implementation, but sourcing a
-# development checkout lets its bootstrap pull and rebuild that shared checkout.
-# Copy only the sourceable surface and resolved binary into this suite's temp
-# root so parallel tests cannot mutate or race user-owned shdeps state.
-_test_prepare_shdeps_snapshot() {
-  local home source_dir="" binary="" candidate snapshot optional
-  local head="" version="" git_root="" source_root=""
-
-  for home in "$@"; do
-    [[ -n "$home" ]] || continue
-    for candidate in "$home/git/shdeps" "$home/.local/share/shdeps"; do
-      if [[ -f "$candidate/install.sh" && -f "$candidate/shdeps.sh" ]]; then
-        source_dir="$candidate"
-        break 2
-      fi
-    done
-  done
-  if [[ -z "$source_dir" ]]; then
-    echo "dot test: no shdeps implementation available for an isolated snapshot" >&2
-    return 1
-  fi
-
-  source_root=$(cd -P -- "$source_dir" 2>/dev/null && pwd) || return 1
-  git_root=$(git -C "$source_dir" rev-parse --show-toplevel 2>/dev/null || true)
-  if [[ -n "$git_root" ]]; then
-    git_root=$(cd -P -- "$git_root" 2>/dev/null && pwd) || return 1
-  fi
-  if [[ "$git_root" == "$source_root" ]]; then
-    # A development checkout is authoritative. Never silently combine its
-    # current shell API with an older installed binary or fallback release.
-    head=$(git -C "$source_dir" rev-parse --short=8 HEAD 2>/dev/null) || {
-      echo "dot test: could not resolve shdeps checkout HEAD: $source_dir" >&2
-      return 1
-    }
-    for candidate in \
-      "$source_dir/shdeps" \
-      "$source_dir/target/release/shdeps" \
-      "$source_dir/target/debug/shdeps"; do
-      [[ -x "$candidate" ]] || continue
-      version=$("$candidate" version 2>/dev/null || true)
-      if [[ "$version" == *"$head"* ]]; then
-        binary="$candidate"
-        break
-      fi
-    done
-  else
-    for candidate in \
-      "$source_dir/shdeps" \
-      "$source_dir/target/release/shdeps" \
-      "$source_dir/target/debug/shdeps"; do
-      if [[ -x "$candidate" ]]; then
-        binary="$candidate"
-        break
-      fi
-    done
-  fi
-  if [[ -z "$binary" ]]; then
-    if [[ -n "$head" ]]; then
-      echo "dot test: shdeps checkout has no binary for HEAD $head; run cargo build --release --locked in $source_dir" >&2
-    else
-      echo "dot test: shdeps implementation has no runnable binary: $source_dir" >&2
-    fi
-    return 1
-  fi
-
-  snapshot=$(_tmpdir)
-  cp "$source_dir/install.sh" "$source_dir/shdeps.sh" "$snapshot/" || return 1
-  cp -L "$binary" "$snapshot/shdeps" || return 1
-  chmod +x "$snapshot/shdeps" || return 1
-  # Keep the isolated payload coherent with the public installer surface. In
-  # particular, current install.sh publishes the Lua tree during activation;
-  # omitting it would make snapshot-backed tests exercise an impossible release.
-  for optional in completions lua man; do
-    [[ -e "$source_dir/$optional" ]] || continue
-    cp -R "$source_dir/$optional" "$snapshot/" || return 1
-  done
-
-  DOT_TEST_SHDEPS_SNAPSHOT="$snapshot"
-  SHDEPS_LIB="$snapshot/shdeps.sh"
-  SHDEPS_RUST_CLI="$snapshot/shdeps"
-  export DOT_TEST_SHDEPS_SNAPSHOT SHDEPS_LIB SHDEPS_RUST_CLI
-}
-
-_test_realpath_lines() {
-  local line
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    if [[ -e "$line" || -L "$line" ]]; then
-      _test_realpath "$line"
-    else
-      printf '%s\n' "$line"
-    fi
-  done
-}
-
-# Use this only when path spelling is not part of the behavior under test. Tests
-# that intentionally distinguish visible HOME aliases from canonical paths should
-# keep using _assert_eq with explicit _test_realpath calls at the relevant lines.
-_assert_eq_realpath_lines() {
-  local desc="$1" expected="$2" actual="$3"
-  _assert_eq "$desc" \
-    "$(_test_realpath_lines <<<"$expected")" \
-    "$(_test_realpath_lines <<<"$actual")"
-}
-
 _assert_contains() {
   local desc="$1" expected="$2" actual="$3"
   if [[ "$actual" == *"$expected"* ]]; then
@@ -492,67 +386,12 @@ _assert_not_contains() {
   fi
 }
 
-_assert_colon_list_values_aligned() {
-  local desc="$1" content="$2" marker="$3"
-  local in_list=0 expected_col="" row_count=0
-  local line label after_colon spaces col
-
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    if [[ "$line" == "$marker" ]]; then
-      in_list=1
-      continue
-    fi
-
-    [[ "$in_list" -eq 1 ]] || continue
-    [[ -n "$line" ]] || break
-
-    if [[ "$line" != "  "*:* ]]; then
-      _fail "$desc (unexpected list row '$line')"
-      return
-    fi
-
-    label=${line%%:*}
-    after_colon=${line#*:}
-    spaces=${after_colon%%[! ]*}
-
-    if [[ -z "$spaces" || "$spaces" == "$after_colon" ]]; then
-      _fail "$desc (missing list spacing after '$label:')"
-      return
-    fi
-
-    col=$((${#label} + 1 + ${#spaces}))
-    if [[ -z "$expected_col" ]]; then
-      expected_col=$col
-    elif [[ "$col" -ne "$expected_col" ]]; then
-      _fail "$desc (list starts at column $col, expected $expected_col: '$line')"
-      return
-    fi
-
-    row_count=$((row_count + 1))
-  done <<<"$content"
-
-  if [[ "$row_count" -eq 0 ]]; then
-    _fail "$desc (no rows found after '$marker')"
-  else
-    _pass "$desc"
-  fi
-}
-
 _assert_exit() {
   local desc="$1" expected="$2" actual="$3"
   if [[ "$expected" -eq "$actual" ]]; then
     _pass "$desc"
   else
     _fail "$desc (expected exit $expected, got $actual)"
-  fi
-}
-
-_assert_file_exists() {
-  local desc="$1" path="$2"
-  if [[ -f "$path" ]]; then
-    _pass "$desc"
-  else
-    _fail "$desc (file not found: $path)"
   fi
 }
 
@@ -663,43 +502,6 @@ trap '_cleanup_on_exit "$?"' EXIT
 # ---------------------------------------------------------------------------
 # Common test setup
 # ---------------------------------------------------------------------------
-
-# Create a mock HOME, saving the original. Sets TEST_HOME, REAL_HOME, HOME.
-_mock_home() {
-  # shellcheck disable=SC2034  # REAL_HOME is used by callers
-  REAL_HOME="$HOME"
-  TEST_HOME=$(_tmpdir)
-  export HOME="$TEST_HOME"
-  # Clear caller-owned absolute roots so every tool uses its standard HOME
-  # default. This also keeps nested fresh-HOME subprocesses isolated to their
-  # own HOME instead of pinning them to the outer fixture's directories.
-  unset XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_CACHE_HOME
-  unset MISE_DATA_DIR MISE_STATE_DIR MISE_CACHE_DIR
-  unset SHDEPS_CONF_DIR SHDEPS_HOOKS_DIR SHDEPS_STATE_DIR
-  unset SHDEPS_INSTALL_DIR SHDEPS_BIN_DIR SHDEPS_GIT_DEV_DIR
-  unset SHDEPS_DIR SHDEPS_BIN SHDEPS_LUA_DIR
-  # Isolate tests from real user and system Git config (e.g. core.fsmonitor or
-  # commit signing can spawn external processes). Use an empty writable global
-  # file so fixture `git config --global` calls still succeed.
-  export GIT_CONFIG_NOSYSTEM=1
-  export GIT_CONFIG_GLOBAL="$TEST_HOME/.gitconfig-test"
-  touch "$GIT_CONFIG_GLOBAL"
-}
-
-# Canonical git identity for test repos. Tests never assert on these values;
-# they exist only so commits in fixtures have a valid author.
-DOT_TEST_GIT_EMAIL="test@test.com"
-DOT_TEST_GIT_NAME="Test"
-
-# Set the test git identity on a repo. Pass the git invocation as arguments so
-# any form works, e.g.:
-#   _git_set_test_identity git -C "$dir"
-#   _git_set_test_identity $GIT
-#   _git_set_test_identity "${SOME_GIT_ARRAY[@]}"
-_git_set_test_identity() {
-  "$@" config user.email "$DOT_TEST_GIT_EMAIL"
-  "$@" config user.name "$DOT_TEST_GIT_NAME"
-}
 
 # Create a temp bin directory for mock commands. Returns the path.
 # IMPORTANT: callers must also run `export PATH="$dir:$PATH"` since

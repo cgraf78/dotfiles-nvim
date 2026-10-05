@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 
 nvim_test_merges() {
-  local active_home owner_root source_home
+  local owner_root source_home
   local nvim_home nvim_bin nvim_log nvim_state nvim_data nvim_lock
   local nvim_pgrep_state nvim_strict_status nvim_strict_pid
   local nvim_live_pid nvim_live_start public_api_log api_home
@@ -12,7 +12,6 @@ nvim_test_merges() {
 
   owner_root=$(_nvim_repo_root)
   source_home=$owner_root/home
-  active_home=${DOT_TEST_SOURCE_HOME:-$HOME}
 
   public_api_log=$(_tmpdir)/public-hook-api.log
   api_home=$(_tmpdir)/api-home
@@ -23,12 +22,6 @@ nvim_test_merges() {
 # Minimal inherited compatibility surface for the owner-focused API test.
 _dot_tool_present() { dot_tool_present "$@"; }
 EOF
-  for support in windows.sh agent-playbooks.sh shdeps-assets.sh; do
-    if [[ -f $active_home/.local/lib/dotfiles/merge-hooks.d/lib/$support ]]; then
-      cp "$active_home/.local/lib/dotfiles/merge-hooks.d/lib/$support" \
-        "$api_home/.local/lib/dotfiles/merge-hooks.d/lib/$support"
-    fi
-  done
   : >"$public_api_log"
   export NVIM_TEST_PUBLIC_HOOK_API_LOG=$public_api_log
   nvim_test_load_merge_api "$api_home" || {
