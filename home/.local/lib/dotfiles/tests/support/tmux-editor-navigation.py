@@ -261,7 +261,11 @@ class EditorNavigationTest(unittest.TestCase):
             inner("select-pane", "-t", inner_first)
             inner("select-pane", "-t", inner_second)
 
-            command = shlex.join(
+            # tmux runs pane commands through `default-shell -c`. Only some
+            # shells (bash, zsh) exec a lone simple command; dash and mksh
+            # keep the shell in the foreground, so exec explicitly to make the
+            # nested client the pane's foreground process everywhere.
+            command = "exec " + shlex.join(
                 [
                     "env",
                     "TMUX=",
