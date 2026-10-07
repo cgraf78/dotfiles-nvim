@@ -8,23 +8,45 @@ prerequisite=$prerequisite_dir/10-base-interface.conf
 cat >"$prerequisite" <<'EOF'
 navigate_origin_args="--client-pid #{client_pid} --client-tty #{q:client_tty} --client-created #{client_created} --client-termtype #{q:client_termtype} --source-socket #{q:socket_path} --source-pane #{pane_id} --source-session #{q:session_id}"
 EOF
-socket=dotfiles-nvim-test-$$
-if ! tmux -L "$socket" -f /dev/null new-session -d 2>/dev/null ||
-  ! tmux -L "$socket" source-file "$prerequisite" 2>/dev/null ||
-  ! tmux -L "$socket" source-file "$fragment" 2>/dev/null; then
+
+# The server, its panes, and every run-shell child inherit this environment.
+# A bare `new-session` would start the caller's login shell, which loads live
+# env.d, interactive.d, credentials, and history from the caller's HOME, so
+# give tmux a fixture HOME, a plain sh, and an explicit inert pane command.
+# The private socket lives one level below the runner's short system tmp
+# directory because the per-suite TMPDIR can exceed the Unix socket limit.
+tmux_home=$(_tmpdir)
+socket_dir=$(mktemp -d "${DOT_TEST_SYSTEM_TMPDIR:-${TMPDIR:-/tmp}}/dts.XXXXXX") || {
+  nvim_test_fail 'tmux editor test creates a private socket directory'
+  nvim_test_finish
+}
+CLEANUP_DIRS+=("$socket_dir")
+socket=$socket_dir/tmux.sock
+tmux_env=(env -i HOME="$tmux_home" PATH="$PATH" SHELL=/bin/sh
+  TERM="${TERM:-xterm-256color}" TMPDIR="${TMPDIR:-/tmp}")
+# tmux needs a UTF-8 locale, and Termux supplies its root through PREFIX.
+for passthrough in LANG LC_ALL LC_CTYPE PREFIX; do
+  [[ -n ${!passthrough:-} ]] && tmux_env+=("$passthrough=${!passthrough}")
+done
+tmux_cmd() {
+  "${tmux_env[@]}" tmux -S "$socket" "$@"
+}
+if ! tmux_cmd -f /dev/null new-session -d 'exec sleep 300' 2>/dev/null ||
+  ! tmux_cmd source-file "$prerequisite" 2>/dev/null ||
+  ! tmux_cmd source-file "$fragment" 2>/dev/null; then
   nvim_test_fail 'tmux accepts the editor fragment with a minimal inherited configuration'
-  tmux -L "$socket" kill-server >/dev/null 2>&1 || true
+  tmux_cmd kill-server >/dev/null 2>&1 || true
   nvim_test_finish
 fi
 
-root_keys=$(tmux -L "$socket" list-keys -T root | sed -E 's/^bind-key[[:space:]]+-T /bind-key -T /')
-prefix_keys=$(tmux -L "$socket" list-keys -T prefix | sed -E 's/^bind-key[[:space:]]+-T /bind-key -T /')
-mouse=$(tmux -L "$socket" show-options -gv mouse)
-native_nvim=$(tmux -L "$socket" display-message -p \
+root_keys=$(tmux_cmd list-keys -T root | sed -E 's/^bind-key[[:space:]]+-T /bind-key -T /')
+prefix_keys=$(tmux_cmd list-keys -T prefix | sed -E 's/^bind-key[[:space:]]+-T /bind-key -T /')
+mouse=$(tmux_cmd show-options -gv mouse)
+native_nvim=$(tmux_cmd display-message -p \
   '#{m/r:^g?(view|l?n?vim?x?|fzf)(diff)?$,nvim}')
-native_fzf=$(tmux -L "$socket" display-message -p \
+native_fzf=$(tmux_cmd display-message -p \
   '#{m/r:^g?(view|l?n?vim?x?|fzf)(diff)?$,fzf}')
-native_shell=$(tmux -L "$socket" display-message -p \
+native_shell=$(tmux_cmd display-message -p \
   '#{m/r:^g?(view|l?n?vim?x?|fzf)(diff)?$,bash}')
 ctrl_tab=$(printf '%s\n' "$root_keys" | grep 'bind-key -T root C-Tab ' || true)
 ctrl_shift_tab=$(printf '%s\n' "$root_keys" | grep 'bind-key -T root C-BTab ' || true)
@@ -212,10 +234,12 @@ AWK
 printf 'S+ fd 39056 39056\nS+ fzf 39056 39056\n' | awk "$vim_filter"
 _assert_exit 'tmux editor process fallback matches fzf behind a pipeline' 0 "$?"
 
-tmux -L "$socket" kill-server >/dev/null 2>&1 || true
+tmux_cmd kill-server >/dev/null 2>&1 || true
 
 if command -v python3 >/dev/null 2>&1; then
-  if pty_output=$(python3 \
+  # The PTY driver starts its own private servers; share the fixture
+  # environment so their pane commands cannot load live startup files either.
+  if pty_output=$("${tmux_env[@]}" python3 \
     "${BASH_SOURCE[0]%/*}/support/tmux-editor-navigation.py" \
     --config "$fragment" 2>&1); then
     pty_status=0
