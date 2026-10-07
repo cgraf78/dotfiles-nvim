@@ -151,32 +151,79 @@ _test_realpath() {
   fi
 }
 
-# Suites that start real editor/tool processes from a worktree HOME can reuse
-# the host's installed tool data while still reading config from the source
-# tree. Writable cache/state roots remain suite-local when dot test supplies
-# them; this prevents editor smoke tests from modifying either checkout.
+# Suites that start real editor/tool processes read config from the source
+# tree while every writable Neovim root stays invocation-owned. Explicit
+# NVIM_TEST_{DATA,STATE,CACHE}_HOME roots (owner CI) are used as given, and
+# a cold Lazy install may populate them. Otherwise data starts as a private
+# copy of the host's installed plugin cache: the host tree is only read, so
+# plugin self-builds, parser installs, logs, and Lazy state stay suite-local.
+# Lazy writes its lockfile beside the source config after any install, so a
+# private copy sets NVIM_TEST_PLUGIN_INSTALL_DISABLED=1 for full-config runs
+# to load only what the copy holds.
+# shellcheck disable=SC2034 # NVIM_TEST_PLUGIN_INSTALL_DISABLED is read by callers.
 _test_use_host_runtime_dirs() {
-  local dependency_home="${DOT_TEST_HOST_HOME:-$HOME}"
+  local dependency_home="${DOT_TEST_HOST_HOME:-$HOME}" host_data entry link target
 
+  host_data="${XDG_DATA_HOME:-$dependency_home/.local/share}/nvim"
   XDG_CONFIG_HOME="$HOME/.config"
   export XDG_CONFIG_HOME
 
   if [[ -n ${NVIM_TEST_DATA_HOME:-} ]]; then
+    NVIM_TEST_PLUGIN_INSTALL_DISABLED=0
     XDG_DATA_HOME=$NVIM_TEST_DATA_HOME
     export XDG_DATA_HOME
-  elif [[ -n "$dependency_home" && "$dependency_home" != "$HOME" ]]; then
-    XDG_DATA_HOME="$dependency_home/.local/share"
+  else
+    # Publish the private root and the install guard before seeding, so a
+    # failed copy can never leave Neovim installing into the caller's data.
+    NVIM_TEST_PLUGIN_INSTALL_DISABLED=1
+    XDG_DATA_HOME=$(_tmpdir)
     export XDG_DATA_HOME
+    mkdir -p "$XDG_DATA_HOME/nvim" || return 1
+    # `lazy` holds the plugins and `site` the compiled Tree-sitter parsers;
+    # without the parsers a full-config start would try to build them.
+    for entry in lazy site; do
+      [[ -d $host_data/$entry ]] || continue
+      _test_copy_tree "$host_data/$entry" "$XDG_DATA_HOME/nvim/$entry" || return 1
+    done
+    # Tree-sitter links its queries into `site` by absolute path; point the
+    # copies at the private plugin tree so nothing resolves into the host's.
+    while IFS= read -r link; do
+      target=$(readlink "$link") || return 1
+      [[ $target == "$host_data"/* ]] || continue
+      ln -sfn "$XDG_DATA_HOME/nvim/${target#"$host_data"/}" "$link" || return 1
+    done < <(find "$XDG_DATA_HOME/nvim" -type l)
+    # A copy taken mid-update would make every full-config start wait for an
+    # updater that will never finish here.
+    rm -rf "$XDG_DATA_HOME/nvim/lazy/lazy.nvim.update.lock"
   fi
 
   if [[ -n ${NVIM_TEST_STATE_HOME:-} ]]; then
     XDG_STATE_HOME=$NVIM_TEST_STATE_HOME
-    export XDG_STATE_HOME
+  else
+    XDG_STATE_HOME=$(_tmpdir)
   fi
   if [[ -n ${NVIM_TEST_CACHE_HOME:-} ]]; then
     XDG_CACHE_HOME=$NVIM_TEST_CACHE_HOME
-    export XDG_CACHE_HOME
+  else
+    XDG_CACHE_HOME=$(_tmpdir)
   fi
+  export XDG_STATE_HOME XDG_CACHE_HOME
+}
+
+# Copy a directory tree, sharing extents where the filesystem can: GNU cp
+# reflinks on btrfs and XFS, and macOS cp clones on APFS, which keeps seeding
+# a plugin cache of a few hundred MB near-instant. Anything else falls back
+# to a plain recursive copy. Symlinks are copied as links.
+_test_copy_tree() {
+  local src=$1 dest=$2
+
+  if [[ $(uname -s) == Darwin ]]; then
+    cp -cR "$src" "$dest" 2>/dev/null && return 0
+  else
+    cp -R --reflink=auto "$src" "$dest" 2>/dev/null && return 0
+  fi
+  rm -rf "$dest"
+  cp -R "$src" "$dest"
 }
 
 # Suites that execute host-installed binaries from a worktree HOME sometimes
@@ -285,8 +332,17 @@ _test_load_dot_merge_api() {
 # checks for focused in-process tests. Production still runs each extension in
 # a fresh worker; these tests exercise the client policy helpers without
 # importing private coordinator state.
+#
+# Args: $1 = extension home (required). There is deliberately no HOME
+# fallback: the default result file lives under this root and the loader
+# truncates it, so an implicit live or source HOME would be written to.
 _test_load_dot_doctor_api() {
-  local extension_home=${1:-${DOT_TEST_SOURCE_HOME:-$HOME}} dot_root
+  local extension_home=${1:-} dot_root
+
+  if [[ -z $extension_home ]]; then
+    echo "test harness: _test_load_dot_doctor_api requires an extension home" >&2
+    return 2
+  fi
 
   dot_root=$(_test_dot_root) || return 1
   DOT_SOURCE_ROOT=$dot_root
