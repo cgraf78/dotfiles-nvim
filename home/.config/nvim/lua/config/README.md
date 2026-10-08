@@ -2,8 +2,8 @@
 
 `lua/config/` holds editor-owned policy and small helper APIs consumed by
 plugin specs. Reusable integrations stay behind dependency-owned interfaces;
-for example, `termnav.lua`, `nvim-workspace.lua`, and `dot-runtime.lua` adapt
-those providers without copying their implementation.
+for example, `termnav.lua`, `remote-open.lua`, `nvim-workspace.lua`, and
+`dot-runtime.lua` adapt those providers without copying their implementation.
 
 LazyVim loads `options.lua`, `autocmds.lua`, and `keymaps.lua` by convention.
 Keep this lower-profile directory independent of LSP, Mason, debugger,

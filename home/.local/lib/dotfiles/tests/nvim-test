@@ -1120,13 +1120,228 @@ expected="$(printf '%s\n%s\n%s\n%s\ntrue\ntrue\n%s\n17\ntrue\nfunction\nfunction
 _assert_eq "termnav wrapper: injects only BufferLine policy and reuses one context" \
   "$expected" "$result"
 
-test ! -e "$HOME/.config/nvim/lua/config/nvim-tmux-open.lua"
-opener_wrapper_rc=$?
-_assert_exit "termnav wrapper: retired nvim opener forwarding module is removed" \
-  0 "$opener_wrapper_rc"
-test ! -e "$HOME/.config/nvim/lua/config/wezterm-vars.lua"
-wezterm_vars_wrapper_rc=$?
-_assert_exit "termnav wrapper: retired WezTerm variable forwarding module is removed" \
-  0 "$wezterm_vars_wrapper_rc"
+_assert_file_missing "termnav wrapper: retired nvim opener forwarding module is removed" \
+  "$HOME/.config/nvim/lua/config/nvim-tmux-open.lua"
+_assert_file_missing "termnav wrapper: retired WezTerm variable forwarding module is removed" \
+  "$HOME/.config/nvim/lua/config/wezterm-vars.lua"
+
+# ---------------------------------------------------------------------------
+# Tests: remote vim.ui.open forwarding
+# ---------------------------------------------------------------------------
+
+echo ""
+echo "=== remote-open: vim.ui.open forwarding ==="
+
+# Fake Termnav builds. `link-host` answers from REMOTE_OPEN_HOST; `open-url`
+# either delivers (logs and exits 0), predates the command (exits 2 like an
+# older release's unknown-command path), or fails delivery (exits 1).
+REMOTE_OPEN_TMP=$(_tmpdir)
+REMOTE_OPEN_LOG="$REMOTE_OPEN_TMP/termnav.log"
+export REMOTE_OPEN_LOG
+_remote_open_fake() {
+  local dir="$REMOTE_OPEN_TMP/$1" open_url_status=$2
+  mkdir -p "$dir"
+  cat >"$dir/termnav" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >>"\$REMOTE_OPEN_LOG"
+case "\$1" in
+  link-host) printf '%s\n' "\$REMOTE_OPEN_HOST" ;;
+  open-url) exit $open_url_status ;;
+  *) echo "termnav: unknown command: \$1" >&2; exit 2 ;;
+esac
+EOF
+  chmod +x "$dir/termnav"
+}
+_remote_open_fake current 0
+_remote_open_fake older 2
+_remote_open_fake failing 1
+# Times out while a child keeps its pipes open, so wait() itself gives up.
+mkdir -p "$REMOTE_OPEN_TMP/slow"
+cat >"$REMOTE_OPEN_TMP/slow/termnav" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >>"$REMOTE_OPEN_LOG"
+case "$1" in
+  link-host) printf 'devhost\n' ;;
+  open-url) sleep 10 ;;
+esac
+EOF
+chmod +x "$REMOTE_OPEN_TMP/slow/termnav"
+mkdir -p "$REMOTE_OPEN_TMP/absent" "$REMOTE_OPEN_TMP/broken"
+# Present on PATH but unable to execute, like a wrapper whose interpreter is
+# gone: vim.system raises instead of returning a failed process.
+printf '#!/nonexistent/interpreter\n' >"$REMOTE_OPEN_TMP/broken/termnav"
+chmod +x "$REMOTE_OPEN_TMP/broken/termnav"
+
+# Run one vim.ui.open call through the adapter with a stub original opener and
+# print what happened: which opener answered, the arguments it saw, and every
+# Termnav invocation in order.
+_remote_open_case() {
+  local bin=$1 host=$2 target=$3
+  shift 3
+  : >"$REMOTE_OPEN_LOG"
+  (
+    unset SSH_CONNECTION SSH_TTY VSCODE_IPC_HOOK_CLI TERM_PROGRAM TMUX TMUX_PANE
+    for assignment in "$@"; do
+      export "${assignment?}"
+    done
+    PATH="$REMOTE_OPEN_TMP/$bin:/usr/bin:/bin" REMOTE_OPEN_HOST="$host" \
+      REMOTE_OPEN_TARGET="$target" _nvim_lua '
+      vim.ui.open = function(path, opt)
+        print("original:" .. path .. ":" .. tostring(opt and opt.marker))
+        return "original-process", nil
+      end
+      if vim.env.REMOTE_OPEN_ASSUME == "1" then
+        vim.g.remote_open_assume_remote = true
+      elseif vim.env.REMOTE_OPEN_ASSUME == "number" then
+        vim.g.remote_open_assume_remote = 1
+      end
+      local opt = { marker = "opt" }
+      if vim.env.REMOTE_OPEN_CMD then
+        opt.cmd = { vim.env.REMOTE_OPEN_CMD }
+      end
+      local remote_open = dofile(vim.fn.expand("~/.config/nvim/lua/config/remote-open.lua"))
+      remote_open.setup()
+      local open = function()
+        return vim.ui.open(vim.env.REMOTE_OPEN_TARGET, opt)
+      end
+      if vim.env.REMOTE_OPEN_FALLBACK then
+        local inner = open
+        open = function()
+          return remote_open.fallback(inner)
+        end
+      end
+      local process, err = open()
+      if type(process) == "table" then
+        print("forwarded:" .. process:wait(0).code .. ":" .. tostring(err))
+      end
+    '
+  )
+  # Headless print() leaves the final line unterminated.
+  echo
+  sed 's/^/termnav:/' "$REMOTE_OPEN_LOG"
+}
+
+url='https://example.com/path?a=1&b=two three'
+result=$(_remote_open_case current devhost "$url")
+expected="$(printf 'forwarded:0:nil\ntermnav:link-host\ntermnav:open-url %s' "$url")"
+_assert_eq "remote-open: remote session forwards URLs through termnav open-url" \
+  "$expected" "$result"
+
+result=$(_remote_open_case older devhost "$url")
+expected="$(printf 'original:%s:opt\ntermnav:link-host\ntermnav:open-url %s' "$url" "$url")"
+_assert_eq "remote-open: termnav without open-url falls back to the original opener" \
+  "$expected" "$result"
+
+result=$(_remote_open_case failing devhost "$url")
+_assert_eq "remote-open: failed delivery falls back to the original opener" \
+  "$expected" "$result"
+
+result=$(_remote_open_case absent devhost "$url")
+_assert_eq "remote-open: absent termnav leaves the original opener in charge" \
+  "original:$url:opt" "$result"
+
+result=$(_remote_open_case current localhost "$url")
+expected="$(printf 'original:%s:opt\ntermnav:link-host' "$url")"
+_assert_eq "remote-open: local sessions keep the original opener" \
+  "$expected" "$result"
+
+result=$(_remote_open_case broken devhost "$url")
+_assert_eq "remote-open: a termnav that cannot execute falls back without an error" \
+  "original:$url:opt" "$result"
+
+result=$(_remote_open_case current localhost "$url" REMOTE_OPEN_ASSUME=1)
+expected="$(printf 'forwarded:0:nil\ntermnav:open-url %s' "$url")"
+_assert_eq "remote-open: overlays can mark the whole host remote" \
+  "$expected" "$result"
+
+result=$(_remote_open_case current localhost "$url" REMOTE_OPEN_ASSUME=number)
+expected="$(printf 'forwarded:0:nil\ntermnav:open-url %s' "$url")"
+_assert_eq "remote-open: Vimscript's numeric flag also marks the host remote" \
+  "$expected" "$result"
+
+result=$(_remote_open_case current localhost "$url" REMOTE_OPEN_ASSUME=1 TERM_PROGRAM=vscode)
+_assert_eq "remote-open: VS Code terminals outrank the assume-remote flag" \
+  "original:$url:opt" "$result"
+
+result=$(_remote_open_case current devhost "$url" REMOTE_OPEN_FALLBACK=1)
+_assert_eq "remote-open: overlay fallbacks never retry forwarding" \
+  "original:$url:opt" "$result"
+
+result=$(_remote_open_case slow devhost "$url")
+expected="$(printf 'original:%s:opt\ntermnav:link-host\ntermnav:open-url %s' "$url" "$url")"
+_assert_eq "remote-open: a timed-out delivery falls back without an error" \
+  "$expected" "$result"
+
+result=$(_remote_open_case current devhost "$url" REMOTE_OPEN_CMD=firefox)
+_assert_eq "remote-open: an explicit opt.cmd opener is honored" \
+  "original:$url:opt" "$result"
+
+result=$(_remote_open_case current devhost "$url" TERM_PROGRAM=vscode)
+_assert_eq "remote-open: VS Code terminals keep the original opener" \
+  "original:$url:opt" "$result"
+
+result=$(_remote_open_case current devhost "$url" VSCODE_IPC_HOOK_CLI=/tmp/vscode.sock)
+_assert_eq "remote-open: VS Code remote CLI sessions keep the original opener" \
+  "original:$url:opt" "$result"
+
+# Inside tmux the pane env only says where the pane was created; termnav
+# chooses per request and skips VS Code clients itself.
+result=$(_remote_open_case current devhost "$url" VSCODE_IPC_HOOK_CLI=/tmp/vscode.sock \
+  TMUX=/tmp/tmux-test,1,0)
+expected="$(printf 'forwarded:0:nil\ntermnav:link-host\ntermnav:open-url %s' "$url")"
+_assert_eq "remote-open: inside tmux, termnav decides about VS Code clients" \
+  "$expected" "$result"
+
+result=$(_remote_open_case current devhost mailto:someone@example.com)
+expected="$(printf 'forwarded:0:nil\ntermnav:link-host\ntermnav:open-url mailto:someone@example.com')"
+_assert_eq "remote-open: mailto links are forwarded too" "$expected" "$result"
+
+result=$(_remote_open_case current devhost /tmp/notes.txt)
+_assert_eq "remote-open: file paths are never forwarded to the local desktop" \
+  "original:/tmp/notes.txt:opt" "$result"
+
+# The suite captures stderr, so simulate the TUI case where the editor's
+# stderr is the terminal: Termnav must receive it as the --tty destination.
+: >"$REMOTE_OPEN_LOG"
+result=$(
+  unset SSH_CONNECTION SSH_TTY VSCODE_IPC_HOOK_CLI TERM_PROGRAM TMUX TMUX_PANE
+  PATH="$REMOTE_OPEN_TMP/current:/usr/bin:/bin" REMOTE_OPEN_HOST=devhost \
+    REMOTE_OPEN_TARGET="$url" _nvim_lua '
+  vim.ui.open = function()
+    print("original")
+  end
+  vim.uv.guess_handle = function(fd)
+    return fd == 2 and "tty" or "pipe"
+  end
+  vim.uv.fs_readlink = function(path)
+    return path == "/proc/self/fd/2" and "/dev/pts/77" or nil
+  end
+  local remote_open = dofile(vim.fn.expand("~/.config/nvim/lua/config/remote-open.lua"))
+  remote_open.setup()
+  print(type(vim.ui.open(vim.env.REMOTE_OPEN_TARGET)))
+'
+)
+expected="$(printf 'table\ntermnav:link-host\ntermnav:open-url --tty /dev/pts/77 %s' "$url")"
+_assert_eq "remote-open: the editor terminal is passed to termnav as --tty" \
+  "$expected" "$(
+    printf '%s\n' "$result"
+    sed 's/^/termnav:/' "$REMOTE_OPEN_LOG"
+  )"
+
+result=$(
+  unset SSH_CONNECTION SSH_TTY VSCODE_IPC_HOOK_CLI TERM_PROGRAM TMUX TMUX_PANE
+  PATH="$REMOTE_OPEN_TMP/absent:/usr/bin:/bin" _nvim_lua '
+  local calls = 0
+  vim.ui.open = function()
+    calls = calls + 1
+  end
+  local remote_open = dofile(vim.fn.expand("~/.config/nvim/lua/config/remote-open.lua"))
+  remote_open.setup()
+  remote_open.setup()
+  vim.ui.open("https://example.com")
+  print(calls)
+'
+)
+_assert_eq "remote-open: repeated setup wraps the original opener once" "1" "$result"
 
 _test_summary
