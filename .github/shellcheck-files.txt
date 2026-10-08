@@ -16,6 +16,7 @@ program	home/.local/lib/dotfiles/tests/android-editor-ci-smoke
 program	home/.local/lib/dotfiles/tests/link-routing-test
 program	home/.local/lib/dotfiles/tests/lua-test
 program	home/.local/lib/dotfiles/tests/nvim-doctor-test
+program	home/.local/lib/dotfiles/tests/nvim-keymaps-test
 program	home/.local/lib/dotfiles/tests/nvim-launchers-test
 program	home/.local/lib/dotfiles/tests/nvim-merges-test
 program	home/.local/lib/dotfiles/tests/nvim-shdeps-hooks-test

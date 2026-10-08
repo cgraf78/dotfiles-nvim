@@ -264,6 +264,22 @@ else
       -c 'qa!' 2>&1)
     _assert_eq "editor plugin graph excludes development-only tooling" "" "$result"
     [[ -z ${NVIM_TEST_GRAPH_MARKER:-} ]] || : >"$NVIM_TEST_GRAPH_MARKER"
+
+    # The VSCode-style keymaps are editor-owned, so an editor-only startup must
+    # register them cleanly. Lazy only fires VeryLazy on UIEnter, which
+    # headless Neovim never reaches, so trigger it directly. Match each mapping
+    # by description, because LazyVim and plugins also claim some of these
+    # keys. LazyVim catches a failing keymaps module, so re-require the domain
+    # afterwards: a cached success returns at once, while a failed load raises
+    # again and is reported. Only the domain is checked because the rest of
+    # keymaps.lua needs Termnav, a base dependency the no-base owner fixture
+    # (test/run) lacks.
+    result=$("$NVIM_TEST_BIN" --headless -i NONE \
+      --cmd "$NVIM_FULL_CONFIG_CMD" \
+      -u "$HOME/.config/nvim/init.lua" \
+      -c 'lua local problems={}; vim.api.nvim_exec_autocmds("User", { pattern = "VeryLazy", modeline = false }); for _, map in ipairs({ { "n", "<C-s>", "Save" }, { "n", "<S-Right>", "Select right" }, { "n", "<C-f>", "Find" }, { "n", "<F2>", "Rename symbol" } }) do if vim.fn.maparg(map[2], map[1], false, true).desc ~= map[3] then problems[#problems+1]="missing " .. map[1] .. map[2] end end; local ok, err = pcall(require, "config.keymaps.vscode"); if not ok then problems[#problems+1]=tostring(err):gsub("\n.*", "") end; print(table.concat(problems, "|"))' \
+      -c 'qa!' 2>&1)
+    _assert_eq "editor-only startup registers VSCode-style keymaps without errors" "" "$result"
   fi
 fi
 
