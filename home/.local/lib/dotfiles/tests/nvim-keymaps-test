@@ -419,6 +419,29 @@ result=$(_nvim_vscode_keys '
 ')
 _assert_eq "visual block: Ctrl-Q is explicitly preserved when Ctrl-V pastes" "<C-V>|^V" "$result"
 
+result=$(_nvim_vscode_keys '
+  vim.fn.setreg("\"", "XYZ")
+  vim.api.nvim_buf_set_lines(0, 0, -1, false, {"ab"})
+  vim.api.nvim_win_set_cursor(0, { 1, 1 })
+  vim.api.nvim_feedkeys("2p", "xt", false)
+  print(vim.api.nvim_get_current_line())
+')
+_assert_eq "paste: p puts before the cursor, with its count, without Yanky" "aXYZXYZb" "$result"
+
+# lazy.nvim loads a plugin when its module is first required; a preload hook
+# stands in for that, registering the <Plug> map only once `p` asks for Yanky.
+result=$(_nvim_vscode_keys '
+  package.preload["yanky"] = function()
+    vim.keymap.set({ "n", "x" }, "<Plug>(YankyPutBefore)", function()
+      print("yanky-put-before:" .. vim.v.register)
+    end)
+    return {}
+  end
+  vim.api.nvim_feedkeys("\"ap", "xt", false)
+')
+_assert_eq "paste: p loads Yanky on demand and keeps the register" \
+  "yanky-put-before:a" "$result"
+
 NVIM_CTRL_S_TMP=$(_tmpdir)
 NVIM_CTRL_S_FILE="$NVIM_CTRL_S_TMP/save.txt"
 result=$(_nvim_vscode_keys "

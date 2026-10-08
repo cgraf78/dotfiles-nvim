@@ -25,3 +25,8 @@ Keep modules focused by user workflow:
 
 When a mapping must differ across normal, insert, visual, and select modes,
 document the reason near the mapping. Most bugs in this area are mode-specific.
+
+These mappings are set on VeryLazy, so a lazy-loaded plugin whose spec claims
+the same key would take it back when it loads. Drop such spec keys in
+`lua/plugins/vscode-keymaps.lua`; `nvim-test` loads every plugin and fails on
+any mapping that changes.

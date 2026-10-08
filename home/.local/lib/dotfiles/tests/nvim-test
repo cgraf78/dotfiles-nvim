@@ -280,6 +280,85 @@ else
       -c 'lua local problems={}; vim.api.nvim_exec_autocmds("User", { pattern = "VeryLazy", modeline = false }); for _, map in ipairs({ { "n", "<C-s>", "Save" }, { "n", "<S-Right>", "Select right" }, { "n", "<C-f>", "Find" }, { "n", "<F2>", "Rename symbol" } }) do if vim.fn.maparg(map[2], map[1], false, true).desc ~= map[3] then problems[#problems+1]="missing " .. map[1] .. map[2] end end; local ok, err = pcall(require, "config.keymaps.vscode"); if not ok then problems[#problems+1]=tostring(err):gsub("\n.*", "") end; print(table.concat(problems, "|"))' \
       -c 'qa!' 2>&1)
     _assert_eq "editor-only startup registers VSCode-style keymaps without errors" "" "$result"
+
+    # Loading a plugin makes lazy.nvim replace its spec-key stubs with real
+    # mappings, which used to revert VSCode bindings set on VeryLazy. Load
+    # every remaining plugin through the loader the key and event triggers
+    # use, then require that no described global mapping changed or vanished.
+    # Comparing every mapping keeps new plugins and keys covered without a
+    # hand-maintained list.
+    #
+    # Findings go to a file rather than captured output: loading a plugin can
+    # print notifications, and those are environment noise here. test/run's
+    # controlled PATH has no treesitter build tools, so LazyVim reports unmet
+    # requirements while nvim-treesitter still loads, and the no-base fixture
+    # lacks the Termnav dependency config.autocmds needs. Neither changes a
+    # mapping, so only a plugin that fails to load (its keys never applied)
+    # fails the check alongside changed mappings. Plugins load one at a time
+    # in name order so a raised error names its plugin and runs repeat
+    # exactly.
+    keymap_probe=$(_tmpdir)
+    cat >"$keymap_probe/probe.lua" <<'EOF'
+vim.api.nvim_exec_autocmds("User", { pattern = "VeryLazy", modeline = false })
+local function snapshot()
+  local maps = {}
+  for _, mode in ipairs({ "n", "x", "s", "i", "o", "t", "c" }) do
+    for _, map in ipairs(vim.api.nvim_get_keymap(mode)) do
+      maps[mode .. " " .. map.lhs] = map.desc or ""
+    end
+  end
+  return maps
+end
+local problems = {}
+local before = snapshot()
+-- Guard against a probe with nothing to compare: the VSCode-style keymaps
+-- load in every profile, so their absence means the config did not start.
+if before["n <C-S>"] ~= "Save" then
+  problems[#problems + 1] = "VSCode-style keymaps did not load"
+end
+local plugins = require("lazy.core.config").plugins
+local names = {}
+for name, plugin in pairs(plugins) do
+  if not plugin._.loaded then
+    names[#names + 1] = name
+  end
+end
+table.sort(names)
+for _, name in ipairs(names) do
+  local ok, err = pcall(require("lazy").load, { plugins = { name } })
+  if not ok then
+    problems[#problems + 1] = name .. " failed to load: " .. tostring(err):gsub("\n.*", "")
+  elseif not plugins[name]._.loaded then
+    problems[#problems + 1] = name .. " did not load"
+  end
+end
+local after = snapshot()
+for key, desc in pairs(before) do
+  if desc ~= "" and after[key] ~= desc then
+    problems[#problems + 1] = key .. "=" .. desc .. "->" .. tostring(after[key])
+  end
+end
+table.sort(problems)
+vim.fn.writefile({ table.concat(problems, "|") }, vim.env.NVIM_TEST_KEYMAP_FILE)
+EOF
+    NVIM_TEST_KEYMAP_FILE=$keymap_probe/result "$NVIM_TEST_BIN" --headless -i NONE \
+      --cmd "$NVIM_FULL_CONFIG_CMD" \
+      -u "$HOME/.config/nvim/init.lua" \
+      -c "luafile $keymap_probe/probe.lua" \
+      -c 'qa!' >/dev/null 2>&1
+    _assert_file_content "loading every plugin keeps the VSCode-style and other described mappings" \
+      "" "$keymap_probe/result"
+
+    # Yanky normally loads on the first file open, so `p` in a buffer made
+    # before that must load it on demand rather than do nothing. Clear
+    # 'clipboard' so the put reads the test's register, not the host clipboard.
+    result=$("$NVIM_TEST_BIN" --headless -i NONE \
+      --cmd "$NVIM_FULL_CONFIG_CMD" \
+      -u "$HOME/.config/nvim/init.lua" \
+      -c 'lua vim.api.nvim_exec_autocmds("User", { pattern = "VeryLazy", modeline = false }); local yanky = require("lazy.core.config").plugins["yanky.nvim"]; local before = yanky._.loaded ~= nil; vim.o.clipboard = ""; vim.fn.setreg("\"", "XYZ"); vim.api.nvim_buf_set_lines(0, 0, -1, false, { "ab" }); vim.api.nvim_win_set_cursor(0, { 1, 1 }); vim.api.nvim_feedkeys("p", "xt", false); print(tostring(before) .. "|" .. vim.api.nvim_get_current_line() .. "|" .. tostring(yanky._.loaded ~= nil))' \
+      -c 'qa!' 2>&1)
+    _assert_eq "p before any file open loads Yanky and pastes at the cursor" \
+      "false|aXYZb|true" "$result"
   fi
 fi
 
