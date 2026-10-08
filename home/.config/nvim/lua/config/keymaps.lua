@@ -1,9 +1,13 @@
 -- Keymaps are automatically loaded on the VeryLazy event
 -- Default keymaps that are always set: https://github.com/LazyVim/LazyVim/blob/main/lua/lazyvim/config/keymaps.lua
 
--- The dev overlay contributes VSCode-style development mappings. Editor-only
--- machines deliberately omit that module, so load it only when present.
-pcall(require, "config.keymaps.vscode")
+-- VSCode-style editing mappings are editor-owned, so every profile with this
+-- config gets them. LazyVim.try reports a broken domain as an error instead of
+-- silently dropping it, while the mappings below (and Termnav's refresh) still
+-- load.
+LazyVim.try(function()
+  require("config.keymaps.vscode")
+end, { msg = "Failed loading VSCode-style keymaps" })
 
 local map = vim.keymap.set
 

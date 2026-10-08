@@ -22,9 +22,10 @@ The editor-owned `nvim-workspace` options use only generic repository markers
 and the tracked dotfiles HOME. Sley discovery and Lazygit routing are additive
 dev-overlay policy.
 
-`lua/config/keymaps.lua` loads optional higher-profile keymap domains only when
-they are present. Editor-only machines therefore do not require development
-modules.
+`lua/config/keymaps.lua` loads the editor-owned VSCode-style domain
+(`lua/config/keymaps/vscode/`): Shift-arrow selection, Ctrl-C/X/V clipboard,
+Ctrl-F find, and F2/F12 LSP aliases. Higher overlays add their own mappings
+through the extension points above; the dev overlay's Lazygit mapping is one.
 
 Termnav owns Ctrl-h/j/k/l pane selection, Ctrl-backslash previous-pane
 selection, Ctrl-Tab switching, Alt-Shift-bracket tab movement, and
