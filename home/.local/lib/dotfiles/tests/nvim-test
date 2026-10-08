@@ -281,24 +281,38 @@ else
       -c 'qa!' 2>&1)
     _assert_eq "editor-only startup registers VSCode-style keymaps without errors" "" "$result"
 
-    # Loading a plugin makes lazy.nvim replace its spec-key stubs with real
-    # mappings, which used to revert VSCode bindings set on VeryLazy. Load
-    # every remaining plugin through the loader the key and event triggers
-    # use, then require that no described global mapping changed or vanished.
-    # Comparing every mapping keeps new plugins and keys covered without a
-    # hand-maintained list.
-    #
-    # Findings go to a file rather than captured output: loading a plugin can
-    # print notifications, and those are environment noise here. test/run's
-    # controlled PATH has no treesitter build tools, so LazyVim reports unmet
-    # requirements while nvim-treesitter still loads, and the no-base fixture
-    # lacks the Termnav dependency config.autocmds needs. Neither changes a
-    # mapping, so only a plugin that fails to load (its keys never applied)
-    # fails the check alongside changed mappings. Plugins load one at a time
-    # in name order so a raised error names its plugin and runs repeat
-    # exactly.
-    keymap_probe=$(_tmpdir)
-    cat >"$keymap_probe/probe.lua" <<'EOF'
+    # Yanky normally loads on the first file open, so `p` in a buffer made
+    # before that must load it on demand rather than do nothing. Clear
+    # 'clipboard' so the put reads the test's register, not the host clipboard.
+    result=$("$NVIM_TEST_BIN" --headless -i NONE \
+      --cmd "$NVIM_FULL_CONFIG_CMD" \
+      -u "$HOME/.config/nvim/init.lua" \
+      -c 'lua vim.api.nvim_exec_autocmds("User", { pattern = "VeryLazy", modeline = false }); local yanky = require("lazy.core.config").plugins["yanky.nvim"]; local before = yanky._.loaded ~= nil; vim.o.clipboard = ""; vim.fn.setreg("\"", "XYZ"); vim.api.nvim_buf_set_lines(0, 0, -1, false, { "ab" }); vim.api.nvim_win_set_cursor(0, { 1, 1 }); vim.api.nvim_feedkeys("p", "xt", false); print(tostring(before) .. "|" .. vim.api.nvim_get_current_line() .. "|" .. tostring(yanky._.loaded ~= nil))' \
+      -c 'qa!' 2>&1)
+    _assert_eq "p before any file open loads Yanky and pastes at the cursor" \
+      "false|aXYZb|true" "$result"
+  fi
+
+  # Loading a plugin makes lazy.nvim replace its spec-key stubs with real
+  # mappings, which used to revert VSCode bindings set on VeryLazy. Load
+  # every remaining plugin through the loader the key and event triggers
+  # use, then require that no described global mapping changed or vanished.
+  # Comparing every mapping keeps new plugins and keys covered without a
+  # hand-maintained list. This and the next check run for every composed
+  # config, not just the editor-only one, so hosts that add the dev or work
+  # overlay also cover the keymaps and plugin specs those overlays bring.
+  #
+  # Findings go to a file rather than captured output: loading a plugin can
+  # print notifications, and those are environment noise here. test/run's
+  # controlled PATH has no treesitter build tools, so LazyVim reports unmet
+  # requirements while nvim-treesitter still loads, and the no-base fixture
+  # lacks the Termnav dependency config.autocmds needs. Neither changes a
+  # mapping, so only a plugin that fails to load (its keys never applied)
+  # fails the check alongside changed mappings. Plugins load one at a time
+  # in name order so a raised error names its plugin and runs repeat
+  # exactly.
+  keymap_probe=$(_tmpdir)
+  cat >"$keymap_probe/probe.lua" <<'EOF'
 vim.api.nvim_exec_autocmds("User", { pattern = "VeryLazy", modeline = false })
 local function snapshot()
   local maps = {}
@@ -341,25 +355,48 @@ end
 table.sort(problems)
 vim.fn.writefile({ table.concat(problems, "|") }, vim.env.NVIM_TEST_KEYMAP_FILE)
 EOF
-    NVIM_TEST_KEYMAP_FILE=$keymap_probe/result "$NVIM_TEST_BIN" --headless -i NONE \
-      --cmd "$NVIM_FULL_CONFIG_CMD" \
-      -u "$HOME/.config/nvim/init.lua" \
-      -c "luafile $keymap_probe/probe.lua" \
-      -c 'qa!' >/dev/null 2>&1
-    _assert_file_content "loading every plugin keeps the VSCode-style and other described mappings" \
-      "" "$keymap_probe/result"
+  NVIM_TEST_KEYMAP_FILE=$keymap_probe/result "$NVIM_TEST_BIN" --headless -i NONE \
+    --cmd "$NVIM_FULL_CONFIG_CMD" \
+    -u "$HOME/.config/nvim/init.lua" \
+    -c "luafile $keymap_probe/probe.lua" \
+    -c 'qa!' >/dev/null 2>&1
+  _assert_file_content "loading every plugin keeps the VSCode-style and other described mappings" \
+    "" "$keymap_probe/result"
 
-    # Yanky normally loads on the first file open, so `p` in a buffer made
-    # before that must load it on demand rather than do nothing. Clear
-    # 'clipboard' so the put reads the test's register, not the host clipboard.
-    result=$("$NVIM_TEST_BIN" --headless -i NONE \
-      --cmd "$NVIM_FULL_CONFIG_CMD" \
-      -u "$HOME/.config/nvim/init.lua" \
-      -c 'lua vim.api.nvim_exec_autocmds("User", { pattern = "VeryLazy", modeline = false }); local yanky = require("lazy.core.config").plugins["yanky.nvim"]; local before = yanky._.loaded ~= nil; vim.o.clipboard = ""; vim.fn.setreg("\"", "XYZ"); vim.api.nvim_buf_set_lines(0, 0, -1, false, { "ab" }); vim.api.nvim_win_set_cursor(0, { 1, 1 }); vim.api.nvim_feedkeys("p", "xt", false); print(tostring(before) .. "|" .. vim.api.nvim_get_current_line() .. "|" .. tostring(yanky._.loaded ~= nil))' \
-      -c 'qa!' 2>&1)
-    _assert_eq "p before any file open loads Yanky and pastes at the cursor" \
-      "false|aXYZb|true" "$result"
-  fi
+  # When two plugin specs claim one key, lazy.nvim keeps one stub until both
+  # have loaded and then maps whichever plugin's key it removes last, so the
+  # binding depends on load order. The check above misses that when the load
+  # happens to end in the stub's favor, or when one claimant loads before
+  # VeryLazy, so report every shared claim from the resolved specs; drop the
+  # losing spec's key instead. Reading lazy.nvim internals, it also reports
+  # finding no spec keys at all so a renamed field cannot pass silently.
+  shared_probe=$(_tmpdir)
+  cat >"$shared_probe/probe.lua" <<'EOF'
+local claims, shared = {}, {}
+for name, plugin in pairs(require("lazy.core.config").plugins) do
+  for id in pairs(plugin._.handlers and plugin._.handlers.keys or {}) do
+    claims[id] = claims[id] or {}
+    table.insert(claims[id], name)
+  end
+end
+for id, names in pairs(claims) do
+  if #names > 1 then
+    table.sort(names)
+    shared[#shared + 1] = id .. "=" .. table.concat(names, ",")
+  end
+end
+if next(claims) == nil then
+  shared[#shared + 1] = "no plugin spec keys found"
+end
+table.sort(shared)
+vim.fn.writefile({ table.concat(shared, "|") }, vim.env.NVIM_TEST_KEYMAP_FILE)
+EOF
+  NVIM_TEST_KEYMAP_FILE=$shared_probe/result "$NVIM_TEST_BIN" --headless -i NONE \
+    --cmd "$NVIM_FULL_CONFIG_CMD" \
+    -u "$HOME/.config/nvim/init.lua" \
+    -c "luafile $shared_probe/probe.lua" \
+    -c 'qa!' >/dev/null 2>&1
+  _assert_file_content "no key is claimed by more than one plugin spec" "" "$shared_probe/result"
 fi
 
 # ---------------------------------------------------------------------------
