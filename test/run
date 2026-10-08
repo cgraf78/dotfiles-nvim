@@ -349,11 +349,6 @@ _dr_warn() { dot_doctor_warn "$@"; }
 _dr_fail() { dot_doctor_fail "$@"; }
 _dr_skip() { dot_doctor_skip "$@"; }
 EOF
-mkdir -p "$HOME/.local/lib/dotfiles/merge-hooks.d/lib"
-cat >"$HOME/.local/lib/dotfiles/merge-hooks.d/lib/compat.sh" <<'EOF'
-# Minimal inherited merge-hook interface for capability tests.
-_dot_tool_present() { dot_tool_present "$@"; }
-EOF
 export NVIM_TEST_BIN=$controlled_bin/nvim
 export NVIM_TEST_GRAPH_MARKER=$tmp/nvim-installed-graph-tested
 export NVIM_TEST_GRAPH_INVENTORY=$tmp/nvim-installed-graph.tsv
