@@ -15,13 +15,10 @@ nvim_test_merges() {
 
   public_api_log=$(_tmpdir)/public-hook-api.log
   api_home=$(_tmpdir)/api-home
-  mkdir -p "$api_home/.local/lib/dotfiles/merge-hooks.d/lib"
+  # No base compat.sh: the hook needs only the public hook API.
+  mkdir -p "$api_home/.local/lib/dotfiles/merge-hooks.d"
   cp "$source_home/.local/lib/dotfiles/merge-hooks.d/nvim.sh" \
     "$api_home/.local/lib/dotfiles/merge-hooks.d/nvim.sh"
-  cat >"$api_home/.local/lib/dotfiles/merge-hooks.d/lib/compat.sh" <<'EOF'
-# Minimal inherited compatibility surface for the owner-focused API test.
-_dot_tool_present() { dot_tool_present "$@"; }
-EOF
   : >"$public_api_log"
   export NVIM_TEST_PUBLIC_HOOK_API_LOG=$public_api_log
   nvim_test_load_merge_api "$api_home" || {
@@ -222,7 +219,7 @@ OWNER
   _assert_eq "nvim merge: skips hosts without a Neovim config" \
     "" "$(cat "$nvim_log")"
 
-  _assert_contains "nvim merge: loads support through public hook API" \
+  _assert_not_contains "nvim merge: loads nothing from base compat.sh" \
     $'source\tmerge-hooks.d/lib/compat.sh' "$(cat "$public_api_log")"
   _assert_contains "nvim merge: checks tool presence through public hook API" \
     $'tool\tnvim' "$(cat "$public_api_log")"

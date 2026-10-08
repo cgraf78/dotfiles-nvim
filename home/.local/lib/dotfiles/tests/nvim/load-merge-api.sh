@@ -25,7 +25,7 @@ nvim_test_load_merge_api() {
     printf 'log\t%s\n' "$1" >>"${NVIM_TEST_PUBLIC_HOOK_API_LOG:?}"
     _nvim_public_dot_hook_log "$@"
   }
-  # shellcheck disable=SC2329 # Called through the inherited editor compat shim.
+  # shellcheck disable=SC2329 # Called by the sourced merge hook.
   dot_tool_present() {
     printf 'tool\t%s\n' "$1" >>"${NVIM_TEST_PUBLIC_HOOK_API_LOG:?}"
     _nvim_public_dot_tool_present "$@"

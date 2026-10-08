@@ -1,7 +1,4 @@
 # shellcheck shell=bash
-dot_hook_source merge-hooks.d/lib/compat.sh || return
-
-# shellcheck shell=bash
 # Update Lazy-managed Neovim plugins after dot has converged dependencies.
 #
 # This hook runs from `dot update`, including the existing unattended cron
@@ -174,7 +171,9 @@ _nvim_lazy_lock_acquire() {
 }
 
 merge() {
-  _dot_tool_present nvim || return 0
+  # The public literal probe is the only presence check this hook needs, so
+  # it loads nothing from the base client's compat.sh.
+  dot_tool_present nvim || return 0
   # Termux owns Neovim through its native package path. Running Lazy's
   # unattended desktop/server update during Android bootstrap is not portable.
   dot_hook_platform_match android && return 0
