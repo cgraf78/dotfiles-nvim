@@ -182,7 +182,7 @@ map_selection_command("<BS>", "d", { desc = "Delete selection" })
 -- `P` pastes before cursor (VSCode inserts at cursor, not after it).
 map("n", "<C-v>", "P", { desc = "Paste at cursor" })
 map_selection_command("<C-v>", "P", { desc = "Paste at cursor" })
-map({ "n", "x" }, "p", "<Plug>(YankyPutBefore)", { desc = "Paste at cursor" })
+map({ "n", "x" }, "p", paste.put_before, { expr = true, remap = true, desc = "Paste at cursor" })
 -- Preserve Vim's visual-block entry point now that Ctrl-V is clipboard paste.
 map("n", "<C-q>", "<C-v>", { desc = "Visual block" })
 

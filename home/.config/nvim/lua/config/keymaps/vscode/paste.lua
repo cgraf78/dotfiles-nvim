@@ -14,4 +14,17 @@ function M.setup()
   end
 end
 
+-- `p` pastes at the cursor through Yanky so the yank ring stays in use. Yanky
+-- registers its <Plug> maps only when it loads, and lazy.nvim loads it on the
+-- first file open, so `p` in a buffer created before that (Ctrl-N) did
+-- nothing. Requiring it lets lazy.nvim load it on demand; setups without
+-- Yanky fall back to Vim's own put-before.
+function M.put_before()
+  pcall(require, "yanky")
+  if vim.fn.maparg("<Plug>(YankyPutBefore)", "n") ~= "" then
+    return "<Plug>(YankyPutBefore)"
+  end
+  return "P"
+end
+
 return M
