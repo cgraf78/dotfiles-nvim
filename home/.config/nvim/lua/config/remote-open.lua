@@ -5,8 +5,9 @@
 -- that asks the outer terminal to open a URL where the user actually sits;
 -- this adapter only decides when to use it. Every unmet condition (local
 -- session, VS Code terminal, non-URL target, explicit `opt.cmd`, Termnav
--- absent, broken, or too old for `open-url`, failed delivery) falls through to
--- the original opener, so a missing provider never breaks opening.
+-- absent, broken, or too old for `open-url`, an outer terminal Termnav cannot
+-- confirm is WezTerm, failed delivery) falls through to the original opener,
+-- so a missing provider never breaks opening.
 --
 -- Overlays that know the whole host is remote, whatever transport reached
 -- it, can set `vim.g.remote_open_assume_remote = true` to skip Termnav's
@@ -30,8 +31,8 @@ local function url(target)
     and (target:match("^%a[%w+.-]*://") ~= nil or target:lower():match("^mailto:") ~= nil)
 end
 
--- VS Code terminals ignore WezTerm user vars, so a forwarded request would
--- vanish while reporting success. Its own opener path stays in charge there.
+-- VS Code terminals ignore WezTerm user vars and Termnav declines them, so
+-- skip the round trip and leave VS Code's own opener path in charge.
 -- Inside tmux the environment only records where the pane was created, and
 -- tmux can carry VSCODE_IPC_HOOK_CLI into every pane; Termnav instead skips
 -- VS Code's xterm.js clients per request and fails when none other remains.
@@ -102,8 +103,9 @@ function M.forward(target)
     return nil
   end
   -- Wait synchronously: the exit status decides between success and the
-  -- fallback. An older Termnav rejects the unknown command with status 2, and
-  -- the current one rejects schemes it will not publish the same way.
+  -- fallback. An older Termnav rejects the unknown command with status 2, the
+  -- current one rejects schemes it will not publish the same way, and it
+  -- declines with status 3 an outer terminal it cannot confirm is WezTerm.
   local command = { termnav, "open-url", target }
   local tty = terminal()
   if tty then
