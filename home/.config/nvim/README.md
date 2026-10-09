@@ -31,5 +31,16 @@ Termnav owns Ctrl-h/j/k/l pane selection, Ctrl-backslash previous-pane
 selection, Ctrl-Tab switching, Alt-Shift-bracket tab movement, and
 Alt-Shift-H/J/K/L pane movement across Neovim and tmux boundaries.
 
+In remote sessions (by Termnav's `link-host` notion, which also covers
+transports without `SSH_CONNECTION`), `lua/config/remote-open.lua` forwards
+`vim.ui.open` URLs to the local desktop through `termnav open-url`. Local
+sessions, VS Code terminals, file paths, an explicit `opt.cmd`, a missing,
+broken, or older Termnav, and failed delivery all fall back to Neovim's own
+opener. Inside tmux, Termnav itself skips VS Code clients per request.
+Overlays that wrap other openers can call its `forward(url)` and run their own
+fallback through `fallback(fn, ...)` so it does not forward again, and an
+overlay that knows its whole host is remote can set
+`vim.g.remote_open_assume_remote = true` to skip the per-session check.
+
 The focused suites under `~/.local/lib/dotfiles/tests/` check editor startup,
 plugin specs, shell/tmux integration, the launcher, update hook, and doctor.
