@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   shell:
-    uses: cgraf78/actions/.github/workflows/shell-ci.yml@d08e7db3c8a0cc3c31305f80902507878f3befe1
+    uses: cgraf78/actions/.github/workflows/shell-ci.yml@becad8d814bce500a31e7382888f76b1cd65689f
     with:
       setup: none
       matrix-set: full
@@ -58,7 +58,7 @@ jobs:
           GIT_CONFIG_VALUE_0: main
         with:
           persist-credentials: false
-      - uses: cgraf78/actions/.github/actions/verify-consumer-sync@d08e7db3c8a0cc3c31305f80902507878f3befe1
+      - uses: cgraf78/actions/.github/actions/verify-consumer-sync@becad8d814bce500a31e7382888f76b1cd65689f
 
       - name: Verify public repository and license
         env:

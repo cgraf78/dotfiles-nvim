@@ -39,7 +39,7 @@ wait_github_state() {
 }
 
 wait_github_state_self_test() {
-  local tmp predicate output started
+  local tmp predicate output
   tmp=$(mktemp -d)
   # Clear the trap as it fires so it cannot run again, with `tmp` out of
   # scope, when a caller's own function later returns.
@@ -67,9 +67,21 @@ EOF
   output=$(wait_github_state 2 0.01 "$predicate" "$tmp/state")
   [[ $output == 'ready on attempt 3' ]]
 
-  started=$SECONDS
-  wait_github_state 5 1 true
-  ((SECONDS - started < 1))
+  # A successful first attempt must never sleep. Observe that behavior
+  # directly: integer SECONDS can tick during a sub-second successful call,
+  # and runner scheduling can delay it without the poller sleeping at all.
+  # Keep the sleep override in a subshell so sourced callers retain theirs.
+  output=$(
+    sleep() {
+      printf 'ready predicate unexpectedly slept\n'
+      return 1
+    }
+    wait_github_state 5 1 true
+  )
+  [[ -z $output ]] || {
+    printf '%s\n' "$output" >&2
+    return 1
+  }
 
   if output=$(wait_github_state 1 0.05 sh -c 'echo "last normalized diff"; exit 7' 2>&1); then
     echo 'wait-github-state: never-ready predicate unexpectedly passed' >&2
