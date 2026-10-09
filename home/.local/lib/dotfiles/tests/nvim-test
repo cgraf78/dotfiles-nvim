@@ -38,12 +38,15 @@ _test_prefer_system_git after-dotfiles || exit 1
 # plugin copy loads only what it holds (see _test_use_host_runtime_dirs).
 # LazyVim rewrites lazyvim.json beside the source config whenever its schema
 # version moves, so it reads a scratch copy that carries the same extras.
+# Mason stays off: a composed dev config would otherwise `go install` LSP
+# tools in the background, which needs the network, makes runs depend on
+# install timing, and leaves Go's read-only module cache in a fixture HOME.
 NVIM_TEST_LAZYVIM_JSON=$(_tmpdir)/lazyvim.json
 if [[ -f $HOME/.config/nvim/lazyvim.json ]]; then
   cp "$HOME/.config/nvim/lazyvim.json" "$NVIM_TEST_LAZYVIM_JSON" || exit 1
 fi
 export NVIM_TEST_LAZYVIM_JSON
-NVIM_FULL_CONFIG_CMD='lua vim.g.disable_session_restore = true; vim.g.lazyvim_json = vim.env.NVIM_TEST_LAZYVIM_JSON'
+NVIM_FULL_CONFIG_CMD='lua vim.g.disable_session_restore = true; vim.g.mason_disabled = true; vim.g.lazyvim_json = vim.env.NVIM_TEST_LAZYVIM_JSON'
 if [[ $NVIM_TEST_PLUGIN_INSTALL_DISABLED == 1 ]]; then
   NVIM_FULL_CONFIG_CMD+='; vim.g.plugin_install_disabled = true'
 fi
@@ -447,6 +450,15 @@ EOF
   _nvim_full_config_probe "$override_probe/result" "$override_probe/probe.lua"
   _assert_file_content "no plugin init, config, or build hook is set by more than one spec" \
     "" "$override_probe/result"
+
+  mason_probe=$(_tmpdir)
+  cat >"$mason_probe/probe.lua" <<'EOF'
+local plugins = require("lazy.core.config").plugins
+vim.fn.writefile({ plugins["mason.nvim"] and "mason.nvim is enabled" or "" }, vim.env.NVIM_TEST_PROBE_FILE)
+EOF
+  _nvim_full_config_probe "$mason_probe/result" "$mason_probe/probe.lua"
+  _assert_file_content "full-config runs never enable Mason tool installs" \
+    "" "$mason_probe/result"
 fi
 
 # ---------------------------------------------------------------------------
