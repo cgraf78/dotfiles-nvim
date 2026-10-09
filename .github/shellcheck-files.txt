@@ -2,6 +2,8 @@
 program	test/run
 program	test/workflow-test
 program	test/lib/capability-fixture.sh
+program	test/lib/dot-release.sh
+program	test/lib/suite-inventory.sh
 program	test/lib/wait-github-state.sh
 program	home/.config/shdeps/hooks.d/neovim/neovim.sh
 program	home/.config/shell/env.d/60-editor.sh

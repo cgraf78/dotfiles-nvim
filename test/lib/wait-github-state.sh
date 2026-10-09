@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Poll a GitHub-state predicate with a bounded monotonic deadline.
-set -euo pipefail
+#
+# Shared by cgraf78/actions capability-harness. Consumers vendor this file
+# through consumer-ci/sync.sh; edit the provider copy, never a vendored one.
 
 wait_github_state() {
   local timeout_seconds=$1 interval_seconds=$2
@@ -39,7 +41,9 @@ wait_github_state() {
 wait_github_state_self_test() {
   local tmp predicate output started
   tmp=$(mktemp -d)
-  trap 'rm -rf -- "$tmp"' RETURN
+  # Clear the trap as it fires so it cannot run again, with `tmp` out of
+  # scope, when a caller's own function later returns.
+  trap 'rm -rf -- "$tmp"; trap - RETURN' RETURN
   predicate=$tmp/predicate
   cat >"$predicate" <<'EOF'
 #!/usr/bin/env bash
@@ -74,7 +78,10 @@ EOF
   [[ $output == *'last exit 7'* && $output == *'last normalized diff'* ]]
 }
 
+# Sourcing callers own their shell options; only a direct run opts into strict
+# mode for its self-test or command entry point.
 if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
+  set -euo pipefail
   if [[ ${1:-} == --self-test ]]; then
     wait_github_state_self_test
   elif (($# >= 3)); then
