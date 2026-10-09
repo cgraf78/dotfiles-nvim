@@ -60,6 +60,18 @@ _nvim_lua() {
     -c 'qa!' 2>&1
 }
 
+# Run a Lua probe file against the full composed config. Probes report to
+# the file named by NVIM_TEST_PROBE_FILE rather than stdout, because loading
+# plugins can print notifications that are environment noise here.
+_nvim_full_config_probe() {
+  local result_file="$1" probe_file="$2"
+  NVIM_TEST_PROBE_FILE=$result_file "$NVIM_TEST_BIN" --headless -i NONE \
+    --cmd "$NVIM_FULL_CONFIG_CMD" \
+    -u "$HOME/.config/nvim/init.lua" \
+    -c "luafile $probe_file" \
+    -c 'qa!' >/dev/null 2>&1
+}
+
 # Keep one full-config smoke test in this suite. Most tests use `--noplugin`
 # unit snippets for determinism, but startup/shutdown regressions usually hide
 # in integration paths such as filetype, plugin loading, and workspace probes.
@@ -353,13 +365,9 @@ for key, desc in pairs(before) do
   end
 end
 table.sort(problems)
-vim.fn.writefile({ table.concat(problems, "|") }, vim.env.NVIM_TEST_KEYMAP_FILE)
+vim.fn.writefile({ table.concat(problems, "|") }, vim.env.NVIM_TEST_PROBE_FILE)
 EOF
-  NVIM_TEST_KEYMAP_FILE=$keymap_probe/result "$NVIM_TEST_BIN" --headless -i NONE \
-    --cmd "$NVIM_FULL_CONFIG_CMD" \
-    -u "$HOME/.config/nvim/init.lua" \
-    -c "luafile $keymap_probe/probe.lua" \
-    -c 'qa!' >/dev/null 2>&1
+  _nvim_full_config_probe "$keymap_probe/result" "$keymap_probe/probe.lua"
   _assert_file_content "loading every plugin keeps the VSCode-style and other described mappings" \
     "" "$keymap_probe/result"
 
@@ -389,14 +397,56 @@ if next(claims) == nil then
   shared[#shared + 1] = "no plugin spec keys found"
 end
 table.sort(shared)
-vim.fn.writefile({ table.concat(shared, "|") }, vim.env.NVIM_TEST_KEYMAP_FILE)
+vim.fn.writefile({ table.concat(shared, "|") }, vim.env.NVIM_TEST_PROBE_FILE)
 EOF
-  NVIM_TEST_KEYMAP_FILE=$shared_probe/result "$NVIM_TEST_BIN" --headless -i NONE \
-    --cmd "$NVIM_FULL_CONFIG_CMD" \
-    -u "$HOME/.config/nvim/init.lua" \
-    -c "luafile $shared_probe/probe.lua" \
-    -c 'qa!' >/dev/null 2>&1
+  _nvim_full_config_probe "$shared_probe/result" "$shared_probe/probe.lua"
   _assert_file_content "no key is claimed by more than one plugin spec" "" "$shared_probe/result"
+
+  # lazy.nvim merges opts, keys, cmd, event, ft, and dependencies across the
+  # specs that name one plugin, but `init`, `config`, and `build` are last
+  # wins. A higher overlay that sets one of them for a plugin a lower overlay
+  # or LazyVim already sets silently replaces that hook, which is how the dev
+  # layer once dropped the editor's Ctrl-click mapping. Extend through an opts
+  # function instead. Plain fields such as `lazy` or `enabled` are left out:
+  # overriding those is the intended way to change a plugin's setup.
+  override_probe=$(_tmpdir)
+  cat >"$override_probe/probe.lua" <<'EOF'
+local last_wins = { "init", "config", "build" }
+local fragments = require("lazy.core.config").spec.meta.fragments.fragments
+local sets, problems = {}, {}
+for _, fragment in pairs(fragments) do
+  local spec = type(fragment.spec) == "table" and fragment.spec or {}
+  for _, field in ipairs(last_wins) do
+    local value = rawget(spec, field)
+    if value ~= nil then
+      local key = fragment.name .. "." .. field
+      sets[key] = sets[key] or {}
+      table.insert(sets[key], value)
+    end
+  end
+end
+for key, values in pairs(sets) do
+  -- Two specs repeating `config = true` agree; any function or differing
+  -- value means one of them is discarded.
+  local differs = false
+  for _, value in ipairs(values) do
+    if type(value) == "function" or value ~= values[1] then
+      differs = true
+    end
+  end
+  if #values > 1 and differs then
+    problems[#problems + 1] = key
+  end
+end
+if next(fragments) == nil then
+  problems[#problems + 1] = "no lazy.nvim spec fragments found"
+end
+table.sort(problems)
+vim.fn.writefile({ table.concat(problems, "|") }, vim.env.NVIM_TEST_PROBE_FILE)
+EOF
+  _nvim_full_config_probe "$override_probe/result" "$override_probe/probe.lua"
+  _assert_file_content "no plugin init, config, or build hook is set by more than one spec" \
+    "" "$override_probe/result"
 fi
 
 # ---------------------------------------------------------------------------
