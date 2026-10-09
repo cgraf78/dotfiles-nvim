@@ -2,3 +2,4 @@ capability-fixture.sh
 dot-release.sh
 suite-inventory.sh
 wait-github-state.sh
+workflow-contract.sh
