@@ -22,6 +22,28 @@ jobs:
       shellcheck-inventory-path: .github/shellcheck-files.txt
       test-command: test/run
 
+  installed-profiles:
+    name: Installed profiles
+    # This overlay's own suites run without base or dotfiles-dev installed.
+    # The base gate installs this pull request's revision into real homes and
+    # runs their `dot test`, so a change that is only wrong once composed
+    # fails before it lands. It tracks base main on purpose: hosts run base
+    # main, so that is the combination to test.
+    uses: cgraf78/dotfiles/.github/workflows/installed-profiles.yml@main # zizmor: ignore[unpinned-uses]
+    with:
+      nvim-revision: ${{ github.event.pull_request.head.sha || github.sha }}
+      # The editor home is base plus this overlay; the dev home adds
+      # dotfiles-dev. nvim-test defers its editor-only checks to the editor
+      # home whenever dev is installed, so both homes are needed. The base
+      # home cannot change with this revision, and the size budgets are base's.
+      profiles: editor dev
+      footprint: false
+      # The upgrade/downgrade lifecycle, `dot doctor`, and the cross-repository
+      # ownership and composition checks all install this overlay's content,
+      # but base CI only runs them with this overlay at main.
+      lifecycle: true
+      stack: true
+
   actions-sync:
     name: cgraf78/actions sync
     runs-on: ubuntu-24.04
