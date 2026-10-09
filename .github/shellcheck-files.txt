@@ -5,6 +5,7 @@ program	test/lib/capability-fixture.sh
 program	test/lib/dot-release.sh
 program	test/lib/suite-inventory.sh
 program	test/lib/wait-github-state.sh
+program	test/lib/workflow-contract.sh
 program	home/.config/shdeps/hooks.d/neovim/neovim.sh
 program	home/.config/shell/env.d/60-editor.sh
 program	home/.config/shell/env.d/80-editor-defaults.sh
