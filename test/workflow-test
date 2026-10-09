@@ -54,6 +54,19 @@ if grep -F 'setup: dotfiles' "$workflow" >/dev/null; then fail 'overlay CI must 
 # only require that the shared jobs stay wired at all.
 grep -F 'uses: cgraf78/actions/.github/workflows/shell-ci.yml@' "$workflow" >/dev/null || fail 'shared shell workflow ref is missing'
 grep -F 'uses: cgraf78/actions/.github/actions/verify-consumer-sync@' "$workflow" >/dev/null || fail 'actions sync ref is missing'
+grep -Fx '    uses: cgraf78/dotfiles/.github/workflows/installed-profiles.yml@main # zizmor: ignore[unpinned-uses]' "$workflow" >/dev/null ||
+  fail 'composed installed-profile gate is not wired'
+# shellcheck disable=SC2016 # Match the literal workflow expression.
+grep -Fx '      nvim-revision: ${{ github.event.pull_request.head.sha || github.sha }}' "$workflow" >/dev/null ||
+  fail 'composed installed-profile gate does not test this revision'
+grep -Fx '      profiles: editor dev' "$workflow" >/dev/null ||
+  fail 'composed installed-profile gate runs profiles this overlay cannot change together'
+grep -Fx '      footprint: false' "$workflow" >/dev/null ||
+  fail 'composed installed-profile gate repeats the base footprint budgets'
+grep -Fx '      lifecycle: true' "$workflow" >/dev/null ||
+  fail 'composed gate skips the lifecycle and doctor checks for this revision'
+grep -Fx '      stack: true' "$workflow" >/dev/null ||
+  fail 'composed gate skips the cross-repository stack checks for this revision'
 grep -Fx '      shellcheck-inventory-path: .github/shellcheck-files.txt' "$workflow" >/dev/null || fail 'shell CI does not lint the typed ShellCheck inventory'
 grep -Fx '        run: test/workflow-test --remote' "$workflow" >/dev/null || fail 'remote license check is missing'
 grep -F 'uses: cgraf78/actions/.github/actions/infra-retry@' .github/workflows/retry-infrastructure.yml >/dev/null || fail 'retry action ref is missing'
