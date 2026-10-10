@@ -16,6 +16,12 @@ vim.opt.listchars:append({ lead = "·" })
 -- Match VS Code's editor.rulers = [100] without changing wrapping behavior.
 vim.opt.colorcolumn = "100"
 
+-- Publish the current file (plus a modified marker) as the terminal title.
+-- tmux uses an app-chosen pane title in its pane-border label, so the border
+-- reads "nvim · options.lua +" instead of just the command name.
+vim.o.title = true
+vim.o.titlestring = "%t%( %M%)"
+
 -- Blinking block in normal/visual, blinking bar in insert/command.
 vim.o.guicursor =
   "n-v-c-sm:blinkon500-blinkoff500-block,i-ci-ve:blinkon500-blinkoff500-ver25,r-cr-o:hor20"
