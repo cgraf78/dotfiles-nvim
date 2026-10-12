@@ -39,6 +39,13 @@ if ! tmux_cmd -f /dev/null new-session -d 'exec sleep 300' 2>/dev/null ||
   nvim_test_finish
 fi
 
+help_keys=$(tmux_cmd list-keys -N)
+for description in 'Navigate left across editor and terminal panes' \
+  'Select the next tab across terminal layers' \
+  'Return to the previous pane or editor split' 'Open a file or link in Neovim'; do
+  _assert_contains "tmux editor: help shows $description" "$description" "$help_keys"
+done
+
 root_keys=$(tmux_cmd list-keys -T root | sed -E 's/^bind-key[[:space:]]+-T /bind-key -T /')
 prefix_keys=$(tmux_cmd list-keys -T prefix | sed -E 's/^bind-key[[:space:]]+-T /bind-key -T /')
 mouse=$(tmux_cmd show-options -gv mouse)
@@ -153,7 +160,7 @@ _assert_contains 'tmux editor runtime opens prompted links through the Nvim adap
 _assert_contains 'tmux editor runtime keeps the clipboard paste protocol' \
   'send-keys Escape [778899~' "$clipboard_paste"
 _assert_contains 'tmux editor source assigns the clipboard protocol to C-S-v' \
-  "bind -n C-S-v send-keys Escape '[778899~'" "$fragment_content"
+  "bind -N \"Paste through the editor terminal integration\" -n C-S-v send-keys Escape '[778899~'" "$fragment_content"
 for move_tab in "$move_tab_left" "$move_tab_right"; do
   _assert_contains 'tmux editor runtime forwards tab moves through Nvim and fzf' \
     'view|l?n?vim?x?|fzf' "$move_tab"
