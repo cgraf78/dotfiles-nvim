@@ -2,14 +2,11 @@
 set -u
 . "${BASH_SOURCE[0]%/*}/nvim/helpers.sh"
 config=$HOME/.config/ripgrep/config.editor
-fragment=$HOME/.config/tmux/conf.d/20-editor.conf
 fixture=$HOME/.local/lib/dotfiles/tests/fixtures/nvim-link-routes.tsv
 nvim_test_contains 'ripgrep linkification uses the editor-owned host adapter' \
   '--hostname-bin=ripgrep-link-host' "$config"
 nvim_test_assert 'ripgrep host adapter is executable' \
   test -x "$HOME/.local/bin/ripgrep-link-host"
-nvim_test_contains 'tmux click routing uses the Neovim opener' \
-  'termnav tmux follow-click --stdin' "$fragment"
 nvim_test_assert 'link route fixture is present' test -s "$fixture"
 
 route_check=$(_tmpdir)/route-check.py

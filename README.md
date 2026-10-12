@@ -8,8 +8,10 @@ Public Neovim capability overlay for the top-level
 This repository is the payload selected by the `editor` profile. It owns the
 Neovim binary declaration, editor configuration, navigation and UI plugins,
 editor shell/tmux/ripgrep fragments, update hook, focused tests, doctor checks,
-and documentation. Development-only language tooling and Git workflows are
-added by `dotfiles-dev`.
+and documentation. The tmux fragment holds only keys that need Neovim on the
+other end; base dotfiles owns mouse mode and pane, tab, and link routing (see
+its `.config/tmux/README.md`). Development-only language tooling and Git
+workflows are added by `dotfiles-dev`.
 
 Only files below `home/` are linked into a user's home directory. The
 top-level dotfiles profile selects this repository; this overlay never defines
