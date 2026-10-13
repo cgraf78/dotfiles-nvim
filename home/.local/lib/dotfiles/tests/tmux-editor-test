@@ -29,7 +29,7 @@ tmux_cmd() {
 # The fragment stands alone: everything it sits beside belongs to the base
 # tmux configuration and its own tests. Snapshot tmux's defaults first so the
 # fragment's whole effect can be compared, however its lines are spelled.
-# Each line carries its source so the whole snapshot sorts once, as comm needs.
+# Each line carries its source, so a change shows which state it touched.
 tmux_state() {
   {
     tmux_cmd list-keys | sed -E 's/[[:space:]]+/ /g'
@@ -75,9 +75,14 @@ _assert_contains 'tmux editor source assigns the clipboard protocol to C-S-v' \
 # may add exactly its two Neovim keys and change nothing else: no option, no
 # environment variable, and no other binding. A redefinition here would
 # silently override base on every editor host.
-removed=$(LC_ALL=C comm -23 "$state_dir/before" "$state_dir/after")
+# Lines of the first snapshot missing from the second. awk rather than comm:
+# test/run exposes a fixed command set, and comm is not part of it.
+only_in() {
+  awk 'FILENAME == ARGV[1] { seen[$0] = 1; next } !($0 in seen)' "$2" "$1"
+}
+removed=$(only_in "$state_dir/before" "$state_dir/after")
 # tmux before 3.5 lists the Ctrl-Shift-V key as S-C-v.
-added=$(LC_ALL=C comm -13 "$state_dir/before" "$state_dir/after" |
+added=$(only_in "$state_dir/after" "$state_dir/before" |
   awk '{ key = $4; if (key == "S-C-v") key = "C-S-v"; print $1, $2, $3, key }')
 _assert_eq 'tmux editor fragment removes or changes nothing from tmux defaults' '' "$removed"
 _assert_eq 'tmux editor fragment adds only its two Neovim keys' \
