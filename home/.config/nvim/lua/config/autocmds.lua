@@ -8,3 +8,6 @@ require("config.window-focus").setup()
 -- falling back, whatever state the provider's Lua assets are in.
 require("config.remote-open").setup()
 require("config.termnav").setup()
+-- Here rather than in options.lua: overlays set the assume-remote flag while
+-- Lazy imports their plugin specs, after options.lua has run.
+require("config.clipboard").setup()
