@@ -70,7 +70,8 @@ grep -Fx '      stack: true' "$workflow" >/dev/null ||
 grep -Fx '      shellcheck-inventory-path: .github/shellcheck-files.txt' "$workflow" >/dev/null || fail 'shell CI does not lint the typed ShellCheck inventory'
 grep -Fx '        run: test/workflow-test --remote' "$workflow" >/dev/null || fail 'remote license check is missing'
 grep -F 'uses: cgraf78/actions/.github/actions/infra-retry@' .github/workflows/retry-infrastructure.yml >/dev/null || fail 'retry action ref is missing'
-grep -F 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' "$workflow" >/dev/null || fail 'checkout pin drifted'
+# Require full commit pins, not specific ones, so Dependabot bumps pass.
+grep -E 'actions/checkout@[0-9a-f]{40}( |$)' "$workflow" >/dev/null || fail 'checkout is not commit-pinned'
 
 test/lib/wait-github-state.sh --self-test
 test/lib/capability-fixture.sh --self-test
