@@ -1406,4 +1406,275 @@ result=$(
 )
 _assert_eq "remote-open: repeated setup wraps the original opener once" "1" "$result"
 
+# ---------------------------------------------------------------------------
+# Tests: copy-only OSC 52 clipboard
+# ---------------------------------------------------------------------------
+
+echo ""
+echo "=== clipboard: copy-only OSC 52 outside tmux ==="
+
+# Each case's PATH is one of these directories alone, so host tools such as
+# tmux or xclip never reach Neovim's detection. The others hold stand-ins
+# that detection accepts: lemonade for any working local tool (it needs no
+# display), a tmux that only answers -V, and an xsel that cannot reach its
+# display, as over a broken X11 forward, logging each probe.
+CLIPBOARD_TMP=$(_tmpdir)
+mkdir -p "$CLIPBOARD_TMP/none" "$CLIPBOARD_TMP/tool" "$CLIPBOARD_TMP/tmux" "$CLIPBOARD_TMP/xsel"
+printf '#!/bin/sh\nexit 0\n' >"$CLIPBOARD_TMP/tool/lemonade"
+# Single quotes on purpose: the stubs expand these, not this script.
+# shellcheck disable=SC2016
+printf '#!/bin/sh\n[ "$1" = -V ] && echo "tmux 3.4"\n' >"$CLIPBOARD_TMP/tmux/tmux"
+# shellcheck disable=SC2016
+printf '#!/bin/sh\necho "$*" >>"$CLIPBOARD_PROBE_LOG"\nexit 1\n' >"$CLIPBOARD_TMP/xsel/xsel"
+chmod +x "$CLIPBOARD_TMP/tool/lemonade" "$CLIPBOARD_TMP/tmux/tmux" "$CLIPBOARD_TMP/xsel/xsel"
+
+# Run a command with the environment Neovim's clipboard detection reads
+# scrubbed, then the given VAR=value assignments, and PATH set to one of the
+# directories above: _clipboard_scrubbed DIR [VAR=value...] -- COMMAND...
+_clipboard_scrubbed() {
+  local bin=$1
+  shift
+  (
+    unset SSH_CONNECTION SSH_TTY TMUX TMUX_PANE VSCODE_IPC_HOOK_CLI TERM_PROGRAM \
+      DISPLAY WAYLAND_DISPLAY
+    while [[ $1 != -- ]]; do
+      export "${1?}"
+      shift
+    done
+    shift
+    PATH="$CLIPBOARD_TMP/$bin" "$@"
+  )
+}
+
+# Run config.clipboard's setup in one environment. Left alone, it prints the
+# g:clipboard name and the tool Neovim itself chose. Installed, it prints the
+# name and 'clipboard' as setup left it, then runs the one behavior that
+# CLIPBOARD_CHECK names through the register API. The OSC 52 module is a stub
+# whose paste fails loudly, so any terminal query shows up as an error.
+_clipboard_case() {
+  local bin=$1
+  shift
+  _clipboard_scrubbed "$bin" "$@" -- _nvim_lua '
+    local uis = { terminal = { { stdout_tty = true } }, gui = { { stdout_tty = false } } }
+    local ui = uis[vim.env.CLIPBOARD_UI or "terminal"]
+    if ui then
+      vim.api.nvim_list_uis = function()
+        return ui
+      end
+    end
+    local sent = {}
+    package.loaded["vim.ui.clipboard.osc52"] = {
+      copy = function(reg)
+        return function(lines)
+          sent[#sent + 1] = reg .. "=" .. table.concat(lines, "|")
+        end
+      end,
+      paste = function()
+        return function()
+          error("OSC 52 paste queried the terminal")
+        end
+      end,
+    }
+    -- LazyVim keeps clipboard empty until VeryLazy; with OSC 52 advertised,
+    -- Neovim alone would then pick its querying OSC 52 provider.
+    if vim.env.CLIPBOARD_LAZYVIM == "1" then
+      vim.o.clipboard = ""
+      vim.g.termfeatures = { osc52 = true }
+    else
+      vim.o.clipboard = "unnamedplus"
+    end
+    if vim.env.CLIPBOARD_PRELOAD == "1" then
+      vim.fn.has("clipboard")
+    end
+    if vim.env.CLIPBOARD_ASSUME == "1" then
+      vim.g.remote_open_assume_remote = true
+    elseif vim.env.CLIPBOARD_ASSUME == "number" then
+      vim.g.remote_open_assume_remote = 1
+    end
+    if vim.env.CLIPBOARD_EXPLICIT == "dict" then
+      vim.g.clipboard = { name = "explicit", copy = vim.empty_dict(), paste = vim.empty_dict() }
+    elseif vim.env.CLIPBOARD_EXPLICIT == "false" then
+      vim.g.clipboard = false
+    end
+    if vim.env.CLIPBOARD_DISABLED == "1" then
+      vim.g.loaded_clipboard_provider = 0
+    end
+    local clipboard = dofile(vim.fn.expand("~/.config/nvim/lua/config/clipboard.lua"))
+    clipboard.setup()
+    clipboard.setup()
+    local option_after_setup = vim.o.clipboard
+    local provider = vim.g.clipboard
+    local name = type(provider) == "table" and provider.name or tostring(provider)
+    if name ~= "OSC 52" then
+      -- A disabled provider script never defines its detection function.
+      local tool = "disabled"
+      if vim.env.CLIPBOARD_DISABLED ~= "1" then
+        tool = vim.fn["provider#clipboard#Executable"]()
+      end
+      print("provider=" .. name .. " tool=" .. tool)
+      return
+    end
+    local function show(reg)
+      local info = vim.fn.getreginfo(reg)
+      return reg .. ":" .. table.concat(info.regcontents or {}, "|") .. ":"
+        .. vim.fn.strtrans(info.regtype or "")
+    end
+    print("provider=" .. name)
+    print("clipboard after setup=[" .. option_after_setup .. "]")
+    vim.o.clipboard = "unnamedplus"
+    local check = vim.env.CLIPBOARD_CHECK
+    if check == "copy" then
+      -- Each copy must reach the terminal before setreg() returns.
+      vim.schedule = function()
+        error("a copy waited for the event loop")
+      end
+      vim.fn.setreg("+", { "one", "two" }, "l")
+      local after_first = table.concat(sent, " ")
+      vim.fn.setreg("*", "word", "c")
+      print("sent " .. after_first .. " / " .. table.concat(sent, " "))
+      print("read " .. show("+") .. " " .. show("*"))
+    elseif check == "other" then
+      vim.fn.setreg("+", { "ab", "cd" }, "b")
+      print("read " .. show("*"))
+    elseif check == "fresh" then
+      local ok, err = pcall(vim.cmd, "normal! p")
+      print("read " .. show("+") .. " put=" .. (ok and "ok" or err:match("E%d+") or err))
+    elseif check == "shada" then
+      vim.cmd.rshada({ vim.env.CLIPBOARD_SHADA, bang = true })
+      print("read " .. show("+"))
+    end
+    -- Reading a register must never send anything.
+    if #sent > 0 and (check == "fresh" or check == "shada") then
+      print("unexpected sends " .. table.concat(sent, " "))
+    end
+  ' | tr -d '\r'
+}
+
+# Write a ShaDa file from a session running the given commands; REPLY names it.
+_clipboard_shada() {
+  local args=() command
+  REPLY="$CLIPBOARD_TMP/$1.shada"
+  shift
+  for command in "$@"; do
+    args+=(-c "$command")
+  done
+  _clipboard_scrubbed none -- "$NVIM_TEST_BIN" --headless --noplugin -u NONE -i "$REPLY" \
+    "${args[@]}" -c 'wshada!' -c 'qa!' >/dev/null 2>&1 && [[ -s $REPLY ]]
+}
+
+# The cases below vary one condition from an SSH session outside tmux.
+ssh_tty=SSH_TTY=/dev/pts/7
+
+# Neovim always picks pbcopy on macOS, a working local tool the copy-only
+# provider must leave alone, so the cases that install it are Linux-only.
+if [[ $(uname -s) == Darwin ]]; then
+  no_tool=pbcopy lemonade=pbcopy tmux=pbcopy
+  _assert_eq "clipboard: macOS SSH sessions keep Neovim's pbcopy" \
+    "provider=nil tool=pbcopy" "$(_clipboard_case none "$ssh_tty")"
+else
+  no_tool='' lemonade=lemonade tmux=tmux
+  # Expected output once installed: the name, 'clipboard' as setup left it
+  # ($1), then any lines the case's check prints.
+  _clipboard_installed() {
+    printf '%s\n' 'provider=OSC 52' "clipboard after setup=[$1]" "${@:2}"
+  }
+  installed=$(_clipboard_installed unnamedplus)
+
+  _assert_eq "clipboard: SSH session outside tmux gets the copy-only provider" \
+    "$installed" "$(_clipboard_case none SSH_CONNECTION='10.0.0.1 22 10.0.0.2 22')"
+  _assert_eq "clipboard: SSH_TTY alone marks the session remote" \
+    "$installed" "$(_clipboard_case none "$ssh_tty")"
+  _assert_eq "clipboard: an overlay's assume-remote flag covers transports without SSH variables" \
+    "$installed" "$(_clipboard_case none CLIPBOARD_ASSUME=1)"
+  _assert_eq "clipboard: Vimscript's numeric assume-remote flag also counts" \
+    "$installed" "$(_clipboard_case none CLIPBOARD_ASSUME=number)"
+  _assert_eq "clipboard: LazyVim's deferred 'clipboard' does not let OSC 52 paste in" \
+    "$(_clipboard_installed '')" "$(_clipboard_case none "$ssh_tty" CLIPBOARD_LAZYVIM=1)"
+  _assert_eq "clipboard: replaces an OSC 52 provider loaded during LazyVim's deferral" \
+    "$(_clipboard_installed '')" \
+    "$(_clipboard_case none "$ssh_tty" CLIPBOARD_LAZYVIM=1 CLIPBOARD_PRELOAD=1)"
+
+  # yanky.nvim, which-key, and Snacks key their OSC 52 handling on this name;
+  # Yanky's keeps its save and restore off + and * and so off the terminal.
+  _assert_eq "clipboard: the provider is named exactly OSC 52" \
+    "OSC 52" "$(_clipboard_case none "$ssh_tty" | sed -n 's/^provider=//p')"
+  _assert_eq "clipboard: each copy is sent at once, without the event loop" \
+    "$(_clipboard_installed unnamedplus 'sent +=one|two| / +=one|two| *=word' \
+      'read +:one|two:V *:word:v')" \
+    "$(_clipboard_case none "$ssh_tty" CLIPBOARD_CHECK=copy)"
+  _assert_eq "clipboard: a register never copied to reads the latest copy to the other one" \
+    "$(_clipboard_installed unnamedplus 'read *:ab|cd:^V2')" \
+    "$(_clipboard_case none "$ssh_tty" CLIPBOARD_CHECK=other)"
+  _assert_eq "clipboard: the first paste of a fresh session finds nothing" \
+    "$(_clipboard_installed unnamedplus 'read +::v put=E353')" \
+    "$(_clipboard_case none "$ssh_tty" CLIPBOARD_CHECK=fresh)"
+
+  # The provider script's own load already runs detection; running it again
+  # would double a probe that crosses the network on every startup.
+  clipboard_probes="$CLIPBOARD_TMP/xsel-probes.log"
+  _assert_eq "clipboard: a failing X11 tool is probed and then replaced" \
+    "$installed" \
+    "$(_clipboard_case xsel "$ssh_tty" DISPLAY=:99 SHELL=/bin/sh \
+      CLIPBOARD_PROBE_LOG="$clipboard_probes")"
+  _assert_eq "clipboard: detection runs a single xsel probe" \
+    "1" "$(wc -l <"$clipboard_probes" | tr -d ' ')"
+
+  # Before the first copy, paste answers with the unnamed register a previous
+  # session left in ShaDa, converted to the provider's line and regtype format.
+  if _clipboard_shada delete 'call setline(1, ["kept line", "gone word"])' \
+    'normal! yy' 'normal! jdw'; then
+    _assert_eq "clipboard: before any copy, a charwise register ShaDa restored pastes intact" \
+      "$(_clipboard_installed unnamedplus 'read +:gone :v')" \
+      "$(_clipboard_case none "$ssh_tty" CLIPBOARD_CHECK=shada CLIPBOARD_SHADA="$REPLY")"
+  else
+    _fail "clipboard: could not write the charwise ShaDa fixture"
+  fi
+  if _clipboard_shada blank 'call setline(1, ["x", ""])' 'normal! ggyj'; then
+    _assert_eq "clipboard: before any copy, a restored linewise yank keeps its blank line" \
+      "$(_clipboard_installed unnamedplus 'read +:x|:V')" \
+      "$(_clipboard_case none "$ssh_tty" CLIPBOARD_CHECK=shada CLIPBOARD_SHADA="$REPLY")"
+  else
+    _fail "clipboard: could not write the linewise ShaDa fixture"
+  fi
+  if _clipboard_shada block 'call setline(1, ["ab", "cd"])' 'exe "normal! gg\<C-v>jly"'; then
+    _assert_eq "clipboard: before any copy, a restored blockwise yank keeps its shape" \
+      "$(_clipboard_installed unnamedplus 'read +:ab|cd:^V2')" \
+      "$(_clipboard_case none "$ssh_tty" CLIPBOARD_CHECK=shada CLIPBOARD_SHADA="$REPLY")"
+  else
+    _fail "clipboard: could not write the blockwise ShaDa fixture"
+  fi
+fi
+
+_assert_eq "clipboard: local sessions keep Neovim's provider choice" \
+  "provider=nil tool=$no_tool" "$(_clipboard_case none)"
+_assert_eq "clipboard: an empty SSH_CONNECTION, as test/run exports, is not remote" \
+  "provider=nil tool=$no_tool" "$(_clipboard_case none SSH_CONNECTION=)"
+_assert_eq "clipboard: tmux keeps its own provider" \
+  "provider=nil tool=$tmux" "$(_clipboard_case tmux "$ssh_tty" TMUX=/tmp/tmux-1/default,1,0)"
+# Even where Neovim's detection would not find tmux, TMUX alone opts out.
+_assert_eq "clipboard: TMUX alone keeps the copy-only provider off" \
+  "provider=nil tool=$no_tool" "$(_clipboard_case none "$ssh_tty" TMUX=/tmp/tmux-1/default,1,0)"
+_assert_eq "clipboard: VS Code terminals keep their own clipboard handling" \
+  "provider=nil tool=$no_tool" "$(_clipboard_case none "$ssh_tty" TERM_PROGRAM=vscode)"
+_assert_eq "clipboard: VS Code's IPC hook also marks its terminal" \
+  "provider=nil tool=$no_tool" \
+  "$(_clipboard_case none "$ssh_tty" VSCODE_IPC_HOOK_CLI=/tmp/vscode.sock)"
+_assert_eq "clipboard: a working local clipboard tool is not overridden" \
+  "provider=nil tool=$lemonade" "$(_clipboard_case tool "$ssh_tty")"
+_assert_eq "clipboard: an explicit g:clipboard is not overridden" \
+  "provider=explicit tool=explicit" "$(_clipboard_case none "$ssh_tty" CLIPBOARD_EXPLICIT=dict)"
+_assert_eq "clipboard: g:clipboard=false keeps Neovim's own detection" \
+  "provider=false tool=$no_tool" "$(_clipboard_case none "$ssh_tty" CLIPBOARD_EXPLICIT=false)"
+_assert_eq "clipboard: a disabled clipboard provider stays disabled" \
+  "provider=nil tool=disabled" "$(_clipboard_case none "$ssh_tty" CLIPBOARD_DISABLED=1)"
+_assert_eq "clipboard: headless runs keep Neovim's provider choice" \
+  "provider=nil tool=$no_tool" "$(_clipboard_case none "$ssh_tty" CLIPBOARD_UI=headless)"
+_assert_eq "clipboard: UIs without a terminal, such as vscode-neovim, are left alone" \
+  "provider=nil tool=$no_tool" "$(_clipboard_case none "$ssh_tty" CLIPBOARD_UI=gui)"
+# Setup must run from autocmds.lua, after overlays' plugin specs set the
+# assume-remote flag; every full-config run here is headless, so a missing
+# call would otherwise go unnoticed.
+_assert_eq "clipboard: autocmds.lua installs the provider" "1" \
+  "$(grep -Fxc 'require("config.clipboard").setup()' "$HOME/.config/nvim/lua/config/autocmds.lua")"
+
 _test_summary

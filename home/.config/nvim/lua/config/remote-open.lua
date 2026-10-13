@@ -13,6 +13,8 @@
 -- it, can set `vim.g.remote_open_assume_remote = true` to skip Termnav's
 -- per-session link-host check.
 
+local session = require("config.session")
+
 local M = {}
 
 -- Bound each Termnav call so a wedged tmux server costs the user a short
@@ -31,18 +33,6 @@ local function url(target)
     and (target:match("^%a[%w+.-]*://") ~= nil or target:lower():match("^mailto:") ~= nil)
 end
 
--- VS Code terminals ignore WezTerm user vars and Termnav declines them, so
--- skip the round trip and leave VS Code's own opener path in charge.
--- Inside tmux the environment only records where the pane was created, and
--- tmux can carry VSCODE_IPC_HOOK_CLI into every pane; Termnav instead skips
--- VS Code's xterm.js clients per request and fails when none other remains.
-local function vscode()
-  if vim.env.TMUX then
-    return false
-  end
-  return vim.env.VSCODE_IPC_HOOK_CLI ~= nil or vim.env.TERM_PROGRAM == "vscode"
-end
-
 -- Run one Termnav command to completion. A binary that is present but cannot
 -- execute makes vim.system raise; report that as a failed run instead.
 local function run(command)
@@ -59,9 +49,7 @@ end
 -- remote host". It also sees managed transports that publish the host in tmux
 -- without leaving SSH_CONNECTION in this process's environment.
 local function remote(termnav)
-  -- Accept Vimscript's `let g:remote_open_assume_remote = 1` as well.
-  local assume = vim.g.remote_open_assume_remote
-  if assume == true or assume == 1 then
+  if session.assume_remote() then
     return true
   end
   local _, result = run({ termnav, "link-host" })
@@ -95,7 +83,11 @@ end
 ---@param target string
 ---@return vim.SystemObj|nil completed `termnav open-url` process, or nil
 function M.forward(target)
-  if suppressed > 0 or not url(target) or vscode() then
+  -- VS Code terminals ignore WezTerm user vars and Termnav declines them, so
+  -- skip the round trip and leave VS Code's own opener path in charge.
+  -- Inside tmux, Termnav instead skips VS Code's xterm.js clients per
+  -- request and fails when none other remains.
+  if suppressed > 0 or not url(target) or session.vscode() then
     return nil
   end
   local termnav = vim.fn.exepath("termnav")
