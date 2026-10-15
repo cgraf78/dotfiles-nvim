@@ -721,7 +721,11 @@ result=$(_nvim_lua '
       local opts = spec.opts()
       print(tostring(opts.filesystem.use_libuv_file_watcher))
       print(tostring(opts.filesystem.async_directory_scan))
+      print("bind-to-cwd=" .. tostring(opts.filesystem.bind_to_cwd))
+      print("native-follow=" .. tostring(opts.filesystem.follow_current_file.enabled))
+      print("hidden-visible=" .. tostring(opts.filesystem.filtered_items.visible))
       print(tostring(opts.filesystem.window.mappings["<C-r>"]))
+      print(spec.keys[1].desc)
       spec.keys[1][2]()
       spec.keys[2][2]()
       for _, key in ipairs(spec.keys) do
@@ -737,8 +741,8 @@ result=$(_nvim_lua '
   end
   print("missing")
 ')
-expected="$(printf 'false\nalways\nhome\nopen=nil:true:nil\nopen=/workspace/root:nil:focus\nExplorer NeoTree (Workspace Root)\nopen=/workspace/root:nil:focus')"
-_assert_eq "nvim-workspace: neo-tree integration exposes a workspace Explorer key" \
+expected="$(printf 'false\nalways\nbind-to-cwd=false\nnative-follow=false\nhidden-visible=true\nhome\nExplorer NeoTree\nopen=nil:true:nil\nopen=/workspace/root:nil:focus\nExplorer NeoTree (Workspace Root)\nopen=/workspace/root:nil:focus')"
+_assert_eq "nvim-workspace: neo-tree owns its root and exposes contextual and workspace keys" \
   "$expected" "$result"
 
 # ---------------------------------------------------------------------------

@@ -70,7 +70,7 @@ return {
         function()
           require("nvim_workspace.neo_tree").open(nil, { toggle = true })
         end,
-        desc = "Explorer NeoTree (Home)",
+        desc = "Explorer NeoTree",
       },
       {
         "<leader>fE",
@@ -88,10 +88,13 @@ return {
       return {
         enable_git_status = policy.enable_git_status,
         filesystem = {
+          -- Workspace policy owns the tree root independently of :cd/:lcd.
+          bind_to_cwd = false,
           -- Keep the sidebar responsive while its shallow root scan fills in.
           async_directory_scan = "always",
           use_libuv_file_watcher = false,
-          follow_current_file = { enabled = true },
+          -- nvim-workspace owns following; a second follower races tree rebuilds.
+          follow_current_file = { enabled = false },
           filtered_items = policy.filtered_items,
           window = {
             mappings = paths.filesystem_mappings(),
