@@ -83,6 +83,8 @@ return {
       local paths = require("nvim_workspace.neo_tree")
       paths.setup_manager_patch()
       local policy = paths.filesystem_policy()
+      -- Show hidden items by default; H still toggles their visibility.
+      policy.filtered_items.visible = true
       return {
         enable_git_status = policy.enable_git_status,
         filesystem = {
