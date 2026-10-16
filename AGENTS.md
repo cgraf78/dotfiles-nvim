@@ -25,8 +25,7 @@ here defines or changes profile selection.
   empty modules are deliberate extension points for higher overlays.
 - `home/.config/{tmux,shell,ripgrep,shdeps}`: fragments, including the
   Neovim and tree-sitter CLI declarations.
-- `home/.local/lib/dotfiles/tests/`: the focused suites.
-- `docs/`: component docs.
+- `home/.local/lib/dotfiles/tests/`: focused suites; `docs/`: component docs.
 - `test/run`: the suite runner. `test/workflow-test`: the repo contract.
 - `test/lib/`: vendored from cgraf78/actions `capability-harness/`.
 
@@ -34,23 +33,24 @@ here defines or changes profile selection.
 
 - The `installed-editor` incremental footprint (Neovim, config, state,
   cache, and the resolved plugin graph) must stay at or under 500 MiB.
-  Adding plugins can fail CI. It is measured on glibc Linux only.
+  Adding plugins can fail CI. It is measured on macOS and glibc Linux;
+  musl Linux skips it.
 
 ## Testing
 
-- `test/run`: what CI runs. It needs network: it installs the latest Dot
-  release into a scratch home. Optional absolute `CAPABILITY_TEST_NVIM` and
-  `CAPABILITY_TEST_NVIM_DATA_HOME` reuse a local Neovim and its plugins
-  instead of downloading them.
+- `test/run`: what CI runs. It needs network (it installs the latest Dot
+  release; `test/workflow-test` rejects a pinned `DOT_TEST_DOT_RELEASE_TAG`)
+  and `nvim` in a system root or an absolute `CAPABILITY_TEST_NVIM`. An
+  absolute `CAPABILITY_TEST_NVIM_DATA_HOME` reuses installed plugins instead
+  of downloading them. Neither CI nor `test/run` runs selene.
 - `test/workflow-test` (`--remote` also checks GitHub and needs `gh`).
-- Neither CI nor `test/run` runs selene, so `home/.config/nvim/selene.toml`
-  is not a gate.
 
 ## Test isolation
 
 Suites run on a restricted PATH: only the `required_commands` in `test/run`,
-resolved from `/opt/homebrew/bin /usr/local/bin /usr/bin /bin`. `~/.local/bin`
-and mise shims are not visible. A new tool needs three paired edits:
+resolved from `$PREFIX/bin` (Termux), `/opt/homebrew/bin`, `/usr/local/bin`,
+`/usr/bin`, and `/bin`; `~/.local/bin` and mise shims are not visible. A new
+tool needs three paired edits:
 `required_commands`, the `profiles:` line in `.github/workflows/test.yml`, and
 the matching `grep -Fx` line in `test/workflow-test`.
 
@@ -68,10 +68,9 @@ the matching `grep -Fx` line in `test/workflow-test`.
   change those files in actions, never here.
 - `test/workflow-test` pins exact lines of `test.yml` (name, cron
   `23 9 * * *`, the `profiles:` list, the `installed-profiles` inputs), the
-  `20-nvim.conf` fixture call in `test/run`, and the LICENSE and `.gitignore`
-  bytes. Edit it together with any of those.
-- `retry-infrastructure.yml` keys on the workflow name `Tests`; don't rename
-  it.
+  `20-nvim.conf` fixture call and footprint labels in `test/run`, and the
+  LICENSE and `.gitignore` bytes. Edit it together with any of those.
+- `retry-infrastructure.yml` keys on the workflow name `Tests`; keep it.
 - The `installed-profiles` job calls base `installed-profiles.yml@main` with
   profiles `editor dev`, so a base change can turn this repo red. `nvim-test`
   defers its editor-only checks to the editor home when dev is installed.
