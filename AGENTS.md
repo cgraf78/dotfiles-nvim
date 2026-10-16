@@ -34,15 +34,16 @@ here defines or changes profile selection.
 - The `installed-editor` incremental footprint (Neovim, config, state,
   cache, and the resolved plugin graph) must stay at or under 500 MiB.
   Adding plugins can fail CI. It is measured on macOS and glibc Linux;
-  musl Linux skips it.
+  other libcs (musl, Android) and Neovim older than 0.11.2 skip it.
 
 ## Testing
 
 - `test/run`: what CI runs. It needs network (it installs the latest Dot
-  release; `test/workflow-test` rejects a pinned `DOT_TEST_DOT_RELEASE_TAG`)
-  and `nvim` in a system root or an absolute `CAPABILITY_TEST_NVIM`. An
-  absolute `CAPABILITY_TEST_NVIM_DATA_HOME` reuses installed plugins instead
-  of downloading them. Neither CI nor `test/run` runs selene.
+  release unless `DOT_TEST_DOT_RELEASE_TAG` names one; `test/workflow-test`
+  rejects a tag committed in `test/run` or a workflow) and `nvim` in a system
+  root or an absolute `CAPABILITY_TEST_NVIM`. An absolute
+  `CAPABILITY_TEST_NVIM_DATA_HOME` (an XDG data root that runs write to, so
+  use a scratch copy) reuses installed plugins. No gate runs selene.
 - `test/workflow-test` (`--remote` also checks GitHub and needs `gh`).
 
 ## Test isolation
