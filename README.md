@@ -2,48 +2,32 @@
 
 [![Tests](https://github.com/cgraf78/dotfiles-nvim/actions/workflows/test.yml/badge.svg)](https://github.com/cgraf78/dotfiles-nvim/actions/workflows/test.yml)
 
-Public Neovim capability overlay for the top-level
-[`cgraf78/dotfiles`](https://github.com/cgraf78/dotfiles) environment.
+My Neovim configuration, built on [LazyVim](https://www.lazyvim.org/):
 
-This repository is the payload selected by the `editor` profile. It owns the
-Neovim binary declaration, editor configuration, navigation and UI plugins,
-editor shell/tmux/ripgrep fragments, update hook, focused tests, doctor checks,
-and documentation. The tmux fragment holds only keys that need Neovim on the
-other end; base dotfiles owns mouse mode and pane, tab, and link routing (see
-its `.config/tmux/README.md`). Development-only language tooling and Git
-workflows are added by `dotfiles-dev`.
+- VS Code-style editing keys: Shift-arrow selection, Ctrl-C/X/V clipboard,
+  Ctrl-F find, and F2/F12 LSP aliases.
+- Workspace-aware file search, grep, and explorer via
+  [nvim-workspace](https://github.com/cgraf78/nvim-workspace).
+- Ctrl-h/j/k/l navigation across Neovim and tmux panes, including tmux on a
+  remote host reached through `termnav ssh`, via
+  [termnav](https://github.com/cgraf78/termnav) and the tmux bindings in my
+  base dotfiles.
+- An OSC 52 clipboard for remote sessions outside tmux.
 
-Only files below `home/` are linked into a user's home directory. The
-top-level dotfiles profile selects this repository; this overlay never defines
-or changes profile selection. Installation declarations, configuration,
-runtime hooks, focused tests, doctor checks, and component documentation move
-together under the capability that owns them.
+The config lives in [`home/.config/nvim/`](home/.config/nvim/); its
+[README](home/.config/nvim/README.md) explains the plugin load order and
+integrations.
 
-Configuration here may use only tools owned by this overlay or inherited from
-a lower profile. Private, employer-specific, host-specific, and user-specific
-material is forbidden.
+This is the editor layer of my [dotfiles](https://github.com/cgraf78/dotfiles):
+an [overlay](https://github.com/cgraf78/dot/blob/main/docs/overlays.md) whose
+`home/` tree is linked into `$HOME` on top of the base repo. It is installed by
+default there (the `editor` profile), and
+[dotfiles-dev](https://github.com/cgraf78/dotfiles-dev) adds language
+servers, debugging, formatting, and Git workflows on top.
 
-## Local verification
+It is not a drop-in config. Startup loads termnav through
+[shdeps](https://github.com/cgraf78/shdeps), so copying `home/.config/nvim/`
+alone fails without the dotfiles runtime. Borrow individual files instead.
 
-Run `test/run`. The harness creates a temporary no-base Dot client, selects
-this checkout as a `sync=none` overlay, converges it into an isolated HOME, and
-runs only the suites listed in `.github/dot-test-suites.txt`. Because Dot does
-not authorize executable extensions from `sync=none` sources, update-time
-extension discovery points at an empty inherited fixture root; the owner suites
-then exercise this overlay's hooks and doctor code explicitly. The top-level
-profile integration tests cover automatic extension discovery from the real
-Git-backed overlay.
-
-The harness reports two deliberately separate footprint scopes. The
-`source-harness` figures cover the linked editor configuration, the selected
-Neovim executable, and isolated state/cache artifacts; they are not presented
-as a package-install estimate. The `installed-editor` figures add the real
-Lazy plugin graph resolved by the full configuration smoke test and enforce
-the editor profile's 500 MiB measured incremental budget. This measures the
-selected executable rather than every file in a distribution-specific Neovim
-package, which is not portable across the CI matrix.
-
-For a network-free local run, set `CAPABILITY_TEST_NVIM_DATA_HOME` to an
-existing Neovim data directory. The suite still resolves this checkout's
-editor-only graph and measures only the plugin directories in that resolved
-graph; unrelated installed development plugins are excluded.
+Maintainer and agent notes (ownership rules, tests, CI) are in
+[AGENTS.md](AGENTS.md).
