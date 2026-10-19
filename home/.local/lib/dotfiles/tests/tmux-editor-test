@@ -17,7 +17,7 @@ socket_dir=$(mktemp -d "${DOT_TEST_SYSTEM_TMPDIR:-${TMPDIR:-/tmp}}/dts.XXXXXX") 
 }
 CLEANUP_DIRS+=("$socket_dir")
 socket=$socket_dir/tmux.sock
-tmux_env=(env -i HOME="$tmux_home" PATH="$PATH" SHELL=/bin/sh
+tmux_env=("${DOT_TEST_ENV_CLEAN[@]}" HOME="$tmux_home" PATH="$PATH" SHELL=/bin/sh
   TERM="${TERM:-xterm-256color}" TMPDIR="${TMPDIR:-/tmp}")
 # tmux needs a UTF-8 locale, and Termux supplies its root through PREFIX.
 for passthrough in LANG LC_ALL LC_CTYPE PREFIX; do

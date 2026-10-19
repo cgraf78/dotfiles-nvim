@@ -33,6 +33,22 @@ export PYTHONDONTWRITEBYTECODE=1
 # still read $HOME/.zshenv, so use a fixture HOME or `zsh -f` where it matters.
 unset BASH_ENV ENV
 
+# `env -i` argv for fixtures that need an empty environment. Termux's Google
+# Play build cannot execute binaries in app data directly: libtermux-exec,
+# loaded through LD_PRELOAD, routes every exec through the system linker, so a
+# child started with a bare `env -i` fails each exec it makes with EACCES.
+# Only that library is kept, never a caller's own LD_PRELOAD.
+DOT_TEST_ENV_CLEAN=(env -i)
+# LD_PRELOAD is a colon- or space-separated list; keep only its exec shim.
+IFS=': ' read -r -a _dot_test_preloads <<<"${LD_PRELOAD:-}"
+for _dot_test_preload in ${_dot_test_preloads[@]+"${_dot_test_preloads[@]}"}; do
+  if [[ $_dot_test_preload == /*/libtermux-exec*.so ]]; then
+    DOT_TEST_ENV_CLEAN+=("LD_PRELOAD=$_dot_test_preload")
+    break
+  fi
+done
+unset _dot_test_preload _dot_test_preloads
+
 # `dot test` sets DOT_TEST_STYLE=1 for child suites when styled output is
 # appropriate. Individual suites keep exporting NO_COLOR for deterministic tool
 # output, so this opt-in is separate from NO_COLOR and only affects our harness
