@@ -42,6 +42,37 @@ nvim_test_static() {
     "$owner_root/home/.config/ripgrep/config.editor"
   nvim_test_assert 'ripgrep editor adapter is executable' \
     test -x "$owner_root/home/.local/bin/ripgrep-link-host"
+  nvim_test_portability "$owner_root"
+}
+
+# Termux portability for the suites themselves, as base's static suite checks
+# its own: a bare `env -i` drops the libtermux-exec LD_PRELOAD that Termux's
+# Google Play build needs for every nested exec, and a literal /usr/bin:/bin
+# fixture PATH has no userland under Termux. CI's Termux build reproduces
+# neither. helpers.sh owns DOT_TEST_ENV_CLEAN and DOT_TEST_SYSTEM_PATH; a
+# deliberate literal PATH carries the marker on the line above.
+nvim_test_portability() {
+  local owner_root=$1 rel findings=''
+
+  while IFS= read -r rel; do
+    case $rel in *.md | *.py | *.lua) continue ;; esac
+    [[ -f $owner_root/$rel && ! -L $owner_root/$rel ]] || continue
+    # The patterns are split so this check never matches its own source.
+    findings+=$(awk -v rel="$rel" -v env_i='env'' -i' \
+      -v sys_path='/usr/bin'':/bin' -v marker='dot-test-portability:'' literal system PATH' '
+      {
+        code = $0
+        sub(/^[ \t]+/, "", code)
+        if (code !~ /^#/ && code !~ /^DOT_TEST_(ENV_CLEAN|SYSTEM_PATH)=/) {
+          if (index($0, env_i)) print rel ":" NR ": clears the environment without DOT_TEST_ENV_CLEAN"
+          if (index($0, sys_path) && index(previous, marker) == 0)
+            print rel ":" NR ": literal system PATH; use DOT_TEST_SYSTEM_PATH"
+        }
+        previous = $0
+      }' "$owner_root/$rel")
+  done < <(git -C "$owner_root" ls-files -- home/.local/lib/dotfiles/tests)
+  _assert_eq 'Termux portability: suites use the shared clean env and system PATH' \
+    '' "$findings"
 }
 
 # The editor env.d fragments export through base's _shell_env_set. They must
