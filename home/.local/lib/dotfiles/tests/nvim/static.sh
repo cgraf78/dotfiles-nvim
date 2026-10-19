@@ -56,15 +56,15 @@ nvim_test_env_defaults() {
   fill='_shell_env_set() { eval "[ -n \"\${$1+x}\" ]" || export "$1=$2"; }; '
   for sh in bash zsh; do
     command -v "$sh" >/dev/null 2>&1 || continue
-    got=$(env -i HOME=/fixture PATH="$PATH" EDITOR=vim \
+    got=$("${DOT_TEST_ENV_CLEAN[@]}" HOME=/fixture PATH="$PATH" EDITOR=vim \
       "$sh" -c "$probe" _ "$env_d/60-editor.sh" "$env_d/80-editor-defaults.sh")
     _assert_eq "editor env ($sh): plain exports without the base helper" \
       "nvim|night-owl|/fixture/.config/ripgrep/config.editor" "$got"
-    got=$(env -i HOME=/fixture PATH="$PATH" EDITOR=vim \
+    got=$("${DOT_TEST_ENV_CLEAN[@]}" HOME=/fixture PATH="$PATH" EDITOR=vim \
       "$sh" -c "$fill$probe" _ "$env_d/60-editor.sh" "$env_d/80-editor-defaults.sh")
     _assert_eq "editor env ($sh): fill-only load keeps a caller EDITOR" \
       "vim|night-owl|/fixture/.config/ripgrep/config.editor" "$got"
-    got=$(env -i HOME=/fixture PATH="$PATH" RIPGREP_CONFIG_PATH=/caller/rg \
+    got=$("${DOT_TEST_ENV_CLEAN[@]}" HOME=/fixture PATH="$PATH" RIPGREP_CONFIG_PATH=/caller/rg \
       "$sh" -c "$fill$probe" _ "$env_d/60-editor.sh" "$env_d/80-editor-defaults.sh")
     _assert_eq "editor env ($sh): fill-only load keeps a caller ripgrep config" \
       "nvim|night-owl|/caller/rg" "$got"
@@ -91,13 +91,13 @@ nvim_test_env_real_loader() {
   for sh in bash zsh; do
     command -v "$sh" >/dev/null 2>&1 || continue
     # shellcheck disable=SC2016 # Expansion belongs to the isolated child shell.
-    got=$(env -i HOME="$fx" ZDOTDIR="$fx" PATH="$PATH" \
+    got=$("${DOT_TEST_ENV_CLEAN[@]}" HOME="$fx" ZDOTDIR="$fx" PATH="$PATH" \
       BASH_ENV="$fx/.config/shell/env-noninteractive.sh" \
       "$sh" -c 'printf "%s|%s" "$EDITOR" "$RIPGREP_CONFIG_PATH"' </dev/null)
     _assert_eq "editor env ($sh): real fill-only load layers over base" \
       "nvim|$fx/.config/ripgrep/config.editor" "$got"
     # shellcheck disable=SC2016 # Expansion belongs to the isolated child shell.
-    got=$(env -i HOME="$fx" ZDOTDIR="$fx" PATH="$PATH" EDITOR=vim \
+    got=$("${DOT_TEST_ENV_CLEAN[@]}" HOME="$fx" ZDOTDIR="$fx" PATH="$PATH" EDITOR=vim \
       RIPGREP_CONFIG_PATH=/caller/rg \
       BASH_ENV="$fx/.config/shell/env-noninteractive.sh" \
       "$sh" -c 'printf "%s|%s" "$EDITOR" "$RIPGREP_CONFIG_PATH"' </dev/null)
