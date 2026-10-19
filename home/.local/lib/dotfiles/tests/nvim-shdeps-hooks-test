@@ -67,7 +67,7 @@ shdeps_pkg_install_for_mgr() {
   printf 'pkg:%s\n' "$*" >>"$nvim_calls"
   return 0
 }
-PATH="$nvim_brew:/usr/bin:/bin" NVIM_TEST_BREW_PREFIX="$nvim_brew_prefix" \
+PATH="$nvim_brew:$DOT_TEST_SYSTEM_PATH" NVIM_TEST_BREW_PREFIX="$nvim_brew_prefix" \
   install "neovim/neovim"
 if [[ -L "$nvim_home/neovim/neovim/bin/nvim" ]]; then
   _pass "neovim: brew install exposes real binary behind launcher"

@@ -49,6 +49,13 @@ for _dot_test_preload in ${_dot_test_preloads[@]+"${_dot_test_preloads[@]}"}; do
 done
 unset _dot_test_preload _dot_test_preloads
 
+# The system userland a fixture PATH ends with; mirrors the base helper of the
+# same name. Termux has no userland of its own under /usr/bin or /bin, so its
+# tools live in $PREFIX/bin, and Bash searches PATH itself.
+DOT_TEST_SYSTEM_PATH=/usr/bin:/bin
+[[ ${PREFIX:-} == *com.termux*/usr ]] &&
+  DOT_TEST_SYSTEM_PATH=$PREFIX/bin:$DOT_TEST_SYSTEM_PATH
+
 # `dot test` sets DOT_TEST_STYLE=1 for child suites when styled output is
 # appropriate. Individual suites keep exporting NO_COLOR for deterministic tool
 # output, so this opt-in is separate from NO_COLOR and only affects our harness

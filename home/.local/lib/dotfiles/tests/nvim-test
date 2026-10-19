@@ -1250,7 +1250,7 @@ _remote_open_case() {
     for assignment in "$@"; do
       export "${assignment?}"
     done
-    PATH="$REMOTE_OPEN_TMP/$bin:/usr/bin:/bin" REMOTE_OPEN_HOST="$host" \
+    PATH="$REMOTE_OPEN_TMP/$bin:$DOT_TEST_SYSTEM_PATH" REMOTE_OPEN_HOST="$host" \
       REMOTE_OPEN_TARGET="$target" _nvim_lua '
       vim.ui.open = function(path, opt)
         print("original:" .. path .. ":" .. tostring(opt and opt.marker))
@@ -1371,7 +1371,7 @@ _assert_eq "remote-open: file paths are never forwarded to the local desktop" \
 : >"$REMOTE_OPEN_LOG"
 result=$(
   unset SSH_CONNECTION SSH_TTY VSCODE_IPC_HOOK_CLI TERM_PROGRAM TMUX TMUX_PANE
-  PATH="$REMOTE_OPEN_TMP/current:/usr/bin:/bin" REMOTE_OPEN_HOST=devhost \
+  PATH="$REMOTE_OPEN_TMP/current:$DOT_TEST_SYSTEM_PATH" REMOTE_OPEN_HOST=devhost \
     REMOTE_OPEN_TARGET="$url" _nvim_lua '
   vim.ui.open = function()
     print("original")
@@ -1396,7 +1396,7 @@ _assert_eq "remote-open: the editor terminal is passed to termnav as --tty" \
 
 result=$(
   unset SSH_CONNECTION SSH_TTY VSCODE_IPC_HOOK_CLI TERM_PROGRAM TMUX TMUX_PANE
-  PATH="$REMOTE_OPEN_TMP/absent:/usr/bin:/bin" _nvim_lua '
+  PATH="$REMOTE_OPEN_TMP/absent:$DOT_TEST_SYSTEM_PATH" _nvim_lua '
   local calls = 0
   vim.ui.open = function()
     calls = calls + 1
