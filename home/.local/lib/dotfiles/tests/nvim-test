@@ -97,6 +97,7 @@ _nvim_startup_budget() {
 }
 
 # The regression harness below replaces this function before invoking it.
+# An empty file starts the config without opening one.
 # shellcheck disable=SC2329
 _run_nvim_startup() {
   local timeout_seconds="$1" file="$2"
@@ -105,9 +106,12 @@ _run_nvim_startup() {
   # nvim-workspace session when the full config saves on VimLeavePre.
   _with_timeout "$timeout_seconds" "$NVIM_TEST_BIN" -i NONE --headless \
     --cmd "$NVIM_FULL_CONFIG_CMD" \
-    "$file" '+qa!'
+    ${file:+"$file"} '+qa!'
 }
 
+# Start the full config until one start succeeds within budget seconds, or
+# with an empty budget until one start succeeds at all. On failure, print
+# the failing start's output and return its status (124 for a timeout).
 _prepare_nvim_startup() {
   local file="$1" budget="$2" remaining attempt_timeout output rc elapsed
   local timeout_expired_file timed_out
@@ -148,11 +152,13 @@ _prepare_nvim_startup() {
         deadline=$((deadline + 60))
         continue
       fi
+      [[ "$timed_out" -eq 0 ]] ||
+        echo "startup timed out after $attempt_timeout seconds"
       printf '%s\n' "$output"
       return "$rc"
     fi
 
-    [[ "$elapsed" -le "$budget" ]] && return 0
+    [[ -z "$budget" || "$elapsed" -le "$budget" ]] && return 0
   done
 }
 
@@ -224,35 +230,196 @@ _assert_eq "startup preparation: preserves the original attempt before retrying"
 : >"$startup_mock_log"
 startup_mock_timeout_kind=watchdog-always
 startup_rc=0
-_prepare_nvim_startup "$HOME/.bashrc" "$(_nvim_startup_budget)" || startup_rc=$?
+startup_output=$(_prepare_nvim_startup "$HOME/.bashrc" "$(_nvim_startup_budget)") ||
+  startup_rc=$?
 _assert_eq "startup preparation: a second timeout is terminal" "124" "$startup_rc"
+_assert_eq "startup preparation: a terminal timeout says so" \
+  "startup timed out after 60 seconds" "$startup_output"
 _assert_file_content "startup preparation: timeout retry runs only once" \
   "$expected" "$startup_mock_log"
 
 : >"$startup_mock_log"
 startup_mock_timeout_kind=child
 startup_rc=0
-_prepare_nvim_startup "$HOME/.bashrc" "$(_nvim_startup_budget)" || startup_rc=$?
+startup_output=$(_prepare_nvim_startup "$HOME/.bashrc" "$(_nvim_startup_budget)") ||
+  startup_rc=$?
 eval "$saved_run_nvim_startup"
 _assert_eq "startup preparation: does not retry a child status 124" "124" "$startup_rc"
+_assert_eq "startup preparation: a child status 124 is not called a timeout" \
+  "" "$startup_output"
 _assert_file_content "startup preparation: child status 124 runs once" "120" \
   "$startup_mock_log"
 
-# A private plugin copy cannot install, so a host without a converged plugin
-# cache (or a branch adding a plugin the host has not installed) cannot run
-# the full config. Skip those checks rather than fail on missing plugins.
-_nvim_full_config_missing() {
-  [[ $NVIM_TEST_PLUGIN_INSTALL_DISABLED == 1 ]] || return 0
+# Without a budget, the first successful start is ready however long it took.
+# The stub fails any second start so a lost empty-budget check fails fast.
+: >"$startup_mock_log"
+_run_nvim_startup() {
+  printf '%s\n' "$1" >>"$startup_mock_log"
+  [[ $(wc -l <"$startup_mock_log") -eq 1 ]] || return 3
+  sleep 1.1
+}
+startup_rc=0
+_prepare_nvim_startup "" "" >/dev/null || startup_rc=$?
+eval "$saved_run_nvim_startup"
+_assert_eq "startup preparation: an empty budget accepts a slow first start" "0" "$startup_rc"
+_assert_file_content "startup preparation: an empty budget starts once" "120" \
+  "$startup_mock_log"
+
+startup_args_dir=$(_tmpdir)
+cat >"$startup_args_dir/nvim" <<'EOF'
+#!/usr/bin/env sh
+printf '%s\n' "$@" >"$NVIM_TEST_ARGS_LOG"
+EOF
+chmod +x "$startup_args_dir/nvim"
+NVIM_TEST_ARGS_LOG="$startup_args_dir/args" NVIM_TEST_BIN="$startup_args_dir/nvim" \
+  _run_nvim_startup 20 ""
+_assert_file_content "startup preparation: an empty file opens no buffer" \
+  "$(printf '%s\n' -i NONE --headless --cmd "$NVIM_FULL_CONFIG_CMD" '+qa!')" \
+  "$startup_args_dir/args"
+
+# A failed lazy.nvim bootstrap clone must end a headless start with its error.
+# Waiting for a keypress there blocked the cold-install start until the suite
+# timeout, with no output. Run the checkout's real config.lazy from an empty
+# data root against a Git that fails like an unreachable plugin source.
+bootstrap_dir=$(_tmpdir)
+mkdir -p "$bootstrap_dir/bin" "$bootstrap_dir/data" "$bootstrap_dir/config/nvim/lua/config"
+ln -s "$(_nvim_repo_root)/home/.config/nvim/lua/config/lazy.lua" \
+  "$bootstrap_dir/config/nvim/lua/config/lazy.lua"
+printf 'require("config.lazy")\n' >"$bootstrap_dir/config/nvim/init.lua"
+cat >"$bootstrap_dir/bin/git" <<'EOF'
+#!/usr/bin/env sh
+echo 'fatal: unable to access the plugin source' >&2
+exit 128
+EOF
+chmod +x "$bootstrap_dir/bin/git"
+bootstrap_rc=0
+bootstrap_output=$(XDG_CONFIG_HOME="$bootstrap_dir/config" \
+  XDG_DATA_HOME="$bootstrap_dir/data" PATH="$bootstrap_dir/bin:$PATH" \
+  _with_timeout 30 "$NVIM_TEST_BIN" --headless -i NONE '+qa!' 2>&1) ||
+  bootstrap_rc=$?
+_assert_exit "startup preparation: a failed lazy.nvim clone exits headless Neovim" \
+  1 "$bootstrap_rc"
+_assert_contains "startup preparation: a failed lazy.nvim clone reports why" \
+  "Failed to clone lazy.nvim:"$'\n'"fatal: unable to access the plugin source" \
+  "$bootstrap_output"
+_assert_not_contains "startup preparation: headless clone failure asks for no keypress" \
+  "Press any key" "$bootstrap_output"
+
+# Print the plugins the composed config declares but has not installed,
+# comma-separated, or "lazy.nvim" when the plugin manager itself is absent.
+# The regression harness below replaces this function before invoking it.
+# shellcheck disable=SC2329
+_nvim_full_config_uninstalled() {
   _with_timeout 60 "$NVIM_TEST_BIN" --headless -i NONE --cmd "$NVIM_FULL_CONFIG_CMD" \
     -u "$HOME/.config/nvim/init.lua" \
     -c 'lua local missing = {}; if vim.g.plugin_manager_missing then missing = { "lazy.nvim" } else for name, plugin in pairs(require("lazy.core.config").plugins) do if not plugin._.installed then missing[#missing + 1] = name end end end; table.sort(missing); io.stdout:write(table.concat(missing, ","))' \
     -c 'qa!' 2>/dev/null
 }
 
+# A private plugin copy cannot install, so a host without a converged plugin
+# cache (or a branch adding a plugin the host has not installed) cannot run
+# the full config. Skip those checks rather than fail on missing plugins.
+_nvim_full_config_missing() {
+  [[ $NVIM_TEST_PLUGIN_INSTALL_DISABLED == 1 ]] || return 0
+  _nvim_full_config_uninstalled
+}
+
+# Make the composed config ready for the full-config checks, or set REPLY to
+# why it is not and return 1. An explicit NVIM_TEST_DATA_HOME may start empty
+# (installed-profile CI), so the first full-config start clones lazy.nvim and
+# installs the whole plugin graph from the network. Make that start the
+# bounded preparation step, which keeps Neovim's output: the checks have no
+# deadline and discard their output, so a stalled or failed install there
+# would silently consume the whole suite timeout. Opening no file keeps this
+# start to what the first check loads. Lazy still exits 0 when a plugin fails
+# to install, so afterwards turn installs off for every later start and
+# require the graph to be complete. Runs in the caller's shell, because it
+# extends NVIM_FULL_CONFIG_CMD.
+_ready_nvim_full_config() {
+  local output rc missing
+
+  REPLY=
+  output=$(_prepare_nvim_startup "" "" 2>&1) || {
+    rc=$?
+    REPLY="startup preparation failed (exit $rc; output: $output)"
+    return 1
+  }
+  [[ $NVIM_TEST_PLUGIN_INSTALL_DISABLED == 1 ]] && return 0
+
+  NVIM_FULL_CONFIG_CMD+='; vim.g.plugin_install_disabled = true'
+  missing=$(_nvim_full_config_uninstalled) || {
+    rc=$?
+    REPLY="the installed-plugin query failed (exit $rc)"
+    return 1
+  }
+  if [[ -n $missing ]]; then
+    REPLY="startup preparation left plugins uninstalled: $missing"
+    return 1
+  fi
+}
+
+saved_prepare_nvim_startup=$(declare -f _prepare_nvim_startup)
+saved_nvim_full_config_uninstalled=$(declare -f _nvim_full_config_uninstalled)
+saved_nvim_full_config_cmd=$NVIM_FULL_CONFIG_CMD
+saved_nvim_test_plugin_install_disabled=$NVIM_TEST_PLUGIN_INSTALL_DISABLED
+ready_mock_log=$(_tmpfile)
+_prepare_nvim_startup() {
+  printf 'prepare %s|%s\n' "$1" "$2" >>"$ready_mock_log"
+  printf '%s\n' "$ready_mock_prepare_output"
+  return "$ready_mock_prepare_rc"
+}
+_nvim_full_config_uninstalled() {
+  printf 'query %s\n' "$NVIM_FULL_CONFIG_CMD" >>"$ready_mock_log"
+  printf '%s' "$ready_mock_missing"
+}
+_ready_case() {
+  NVIM_TEST_PLUGIN_INSTALL_DISABLED=$1 ready_mock_prepare_rc=$2
+  ready_mock_prepare_output=$3 ready_mock_missing=$4
+  NVIM_FULL_CONFIG_CMD=base
+  : >"$ready_mock_log"
+  ready_rc=0
+  _ready_nvim_full_config || ready_rc=$?
+}
+
+_ready_case 0 124 "startup timed out after 60 seconds" ""
+_assert_eq "full-config readiness: a failed preparation is not ready" 1 "$ready_rc"
+_assert_eq "full-config readiness: names the failed preparation and its output" \
+  "startup preparation failed (exit 124; output: startup timed out after 60 seconds)" \
+  "$REPLY"
+_assert_file_content "full-config readiness: prepares once, with no file and no budget" \
+  "prepare |" "$ready_mock_log"
+
+_ready_case 0 0 "" "bar.nvim,foo.nvim"
+_assert_eq "full-config readiness: an incomplete install is not ready" 1 "$ready_rc"
+_assert_eq "full-config readiness: names the uninstalled plugins" \
+  "startup preparation left plugins uninstalled: bar.nvim,foo.nvim" "$REPLY"
+
+_ready_case 0 0 "" ""
+_assert_eq "full-config readiness: a complete install is ready" 0 "$ready_rc"
+_assert_file_content "full-config readiness: checks the graph with installs off" \
+  "$(printf 'prepare |\nquery base; vim.g.plugin_install_disabled = true')" \
+  "$ready_mock_log"
+_assert_eq "full-config readiness: later starts cannot install" \
+  "base; vim.g.plugin_install_disabled = true" "$NVIM_FULL_CONFIG_CMD"
+
+_ready_case 1 0 "" ""
+_assert_eq "full-config readiness: a private plugin copy is ready" 0 "$ready_rc"
+_assert_file_content "full-config readiness: a private copy needs no install check" \
+  "prepare |" "$ready_mock_log"
+_assert_eq "full-config readiness: a private copy keeps its start command" \
+  "base" "$NVIM_FULL_CONFIG_CMD"
+
+eval "$saved_prepare_nvim_startup"
+eval "$saved_nvim_full_config_uninstalled"
+NVIM_FULL_CONFIG_CMD=$saved_nvim_full_config_cmd
+NVIM_TEST_PLUGIN_INSTALL_DISABLED=$saved_nvim_test_plugin_install_disabled
+
 full_config_missing=$(_nvim_full_config_missing)
 if [[ -n $full_config_missing ]]; then
   echo "nvim-test: SKIP full-config checks; host plugin cache lacks $full_config_missing (run dot update)" >&2
   _pass "full-config startup skipped: host plugin cache lacks $full_config_missing"
+elif ! _ready_nvim_full_config; then
+  _fail "full-config checks did not run: $REPLY"
 else
   import_order_result=$(_tmpfile)
   import_order_status=0
