@@ -37,6 +37,9 @@ return {
     priority = 1000,
     config = function()
       if colorscheme == "night-owl" then
+        -- Match tmux's focused background at the palette level so gutters and
+        -- floating windows use the same shade as the editor body.
+        require("night-owl.palette").bg = "#021c30"
         -- night-owl ships without good defaults for indent guides, whitespace,
         -- render-markdown headings, and diff backgrounds. Override them and
         -- re-apply on ColorScheme events so :colorscheme reloads don't lose the
