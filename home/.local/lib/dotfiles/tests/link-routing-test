@@ -67,8 +67,27 @@ rg_output=$(cd "$rg_tmp" && RIPGREP_LINK_HOST_LOG="$rg_host_log" \
   rg --color=always --with-filename -n needle src/main.lua)
 _assert_eq 'ripgrep host adapter delegates to the native Termnav command' \
   'link-host' "$(<"$rg_host_log")"
-_assert_contains 'ripgrep emits an Nvim-routable file hyperlink' \
-  'file://route-host.invalid' "$rg_output"
+_assert_contains 'ripgrep distinguishes diagnostic locations from literal file hyperlinks' \
+  'nvim-remote://route-host.invalid' "$rg_output"
 _assert_contains 'ripgrep hyperlink preserves the matched path and line' \
   'src/main.lua:12' "$rg_output"
+
+# A numeric suffix in the filename must remain distinct from the appended
+# diagnostic coordinates; both files may exist, so existence cannot decide it.
+cp "$rg_tmp/src/main.lua" "$rg_tmp/report:2026"
+cp "$rg_tmp/src/main.lua" "$rg_tmp/report"
+rg_output=$(cd "$rg_tmp" && RIPGREP_LINK_HOST_LOG="$rg_host_log" \
+  RIPGREP_CONFIG_PATH="$config" PATH="$rg_bin:$HOME/.local/bin:$PATH" \
+  rg --color=always --with-filename -n needle report:2026)
+rg_uri=$(printf '%s' "$rg_output" | python3 -c '
+import re
+import sys
+match = re.search(r"\x1b\]8;[^;]*;([^\x1b\x07]+)", sys.stdin.read())
+if match is None:
+    raise SystemExit("missing OSC-8 target")
+print(match.group(1))
+')
+rg_root=$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$rg_tmp")
+_assert_eq 'ripgrep preserves numeric filename suffix inside the diagnostic hyperlink' \
+  "nvim-remote://route-host.invalid$rg_root/report:2026:12:1" "$rg_uri"
 nvim_test_finish

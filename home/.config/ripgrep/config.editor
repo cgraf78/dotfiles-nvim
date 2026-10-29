@@ -7,4 +7,6 @@
 --max-columns=200
 --max-columns-preview
 --hostname-bin=ripgrep-link-host
---hyperlink-format=file://{host}{path}:{line}:{column}
+# File URIs carry literal filenames. This route explicitly carries diagnostic
+# coordinates, including when the filename itself ends in a numeric suffix.
+--hyperlink-format=nvim-remote://{host}{path}:{line}:{column}
