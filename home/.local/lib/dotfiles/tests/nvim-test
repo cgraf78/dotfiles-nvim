@@ -54,13 +54,16 @@ fi
 # Run a lua snippet headlessly in nvim. Prepends the nvim config lua dir
 # to package.path so dofile'd modules can resolve their require() calls.
 _nvim_lua() {
-  local _lua_dir="$HOME/.config/nvim/lua"
+  local _lua_dir="$HOME/.config/nvim/lua" _output _rc
   # Keep headless tests off the user's ShaDa file. `dot test` runs suites in
   # parallel, and concurrent nvim processes can otherwise fight over
   # ~/.local/state/nvim/shada/main.shada.
-  "$NVIM_TEST_BIN" --headless --noplugin -u NONE -i NONE \
+  _output=$("$NVIM_TEST_BIN" --headless --noplugin -u NONE -i NONE \
     -c "lua package.path='$_lua_dir/?.lua;' .. package.path; $1" \
-    -c 'qa!' 2>&1
+    -c 'qa!' 2>&1)
+  _rc=$?
+  _nvim_lf "$_output"
+  return "$_rc"
 }
 
 # Run a Lua probe file against the full composed config. Probes report to
@@ -297,6 +300,7 @@ bootstrap_output=$(XDG_CONFIG_HOME="$bootstrap_dir/config" \
   XDG_DATA_HOME="$bootstrap_dir/data" PATH="$bootstrap_dir/bin:$PATH" \
   _with_timeout 30 "$NVIM_TEST_BIN" --headless -i NONE '+qa!' 2>&1) ||
   bootstrap_rc=$?
+bootstrap_output=$(_nvim_lf "$bootstrap_output")
 _assert_exit "startup preparation: a failed lazy.nvim clone exits headless Neovim" \
   1 "$bootstrap_rc"
 _assert_contains "startup preparation: a failed lazy.nvim clone reports why" \
@@ -627,6 +631,24 @@ EOF
   _assert_file_content "full-config runs never enable Mason tool installs" \
     "" "$mason_probe/result"
 fi
+
+# ---------------------------------------------------------------------------
+# Tests: headless output normalization
+# ---------------------------------------------------------------------------
+
+echo ""
+echo "=== nvim: headless output normalization ==="
+# A function stands in for pre-0.12 Neovim, which needs no real binary. Its
+# output ends in CR NL, as a final empty message leaves it.
+_nvim_crlf_stub() {
+  printf 'a\r\nb\rc\r\n' >&2
+  return 3
+}
+crlf_rc=0
+crlf_output=$(NVIM_TEST_BIN=_nvim_crlf_stub _nvim_lua '') || crlf_rc=$?
+_assert_eq "headless output: CR NL becomes NL and a lone CR stays" \
+  $'a\nb\rc' "$crlf_output"
+_assert_exit "headless output: normalizing keeps the exit status" 3 "$crlf_rc"
 
 # ---------------------------------------------------------------------------
 # Tests: scheduled Lazy update lock
@@ -1718,7 +1740,7 @@ _clipboard_case() {
     if #sent > 0 and (check == "fresh" or check == "shada") then
       print("unexpected sends " .. table.concat(sent, " "))
     end
-  ' | tr -d '\r'
+  '
 }
 
 # Write a ShaDa file from a session running the given commands; REPLY names it.

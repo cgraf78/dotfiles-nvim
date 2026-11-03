@@ -31,9 +31,13 @@ export XDG_CONFIG_HOME
 # config modules under test. `-i NONE` keeps concurrent suites off the user's
 # ShaDa file.
 _nvim_lua() {
-  "$NVIM_TEST_BIN" --headless --noplugin -u NONE -i NONE \
+  local _output _rc
+  _output=$("$NVIM_TEST_BIN" --headless --noplugin -u NONE -i NONE \
     -c "lua package.path='$NVIM_TEST_LUA_DIR/?.lua;' .. package.path; $1" \
-    -c 'qa!' 2>&1
+    -c 'qa!' 2>&1)
+  _rc=$?
+  _nvim_lf "$_output"
+  return "$_rc"
 }
 
 # Load the VSCode-style domain under the option values its selection helpers
