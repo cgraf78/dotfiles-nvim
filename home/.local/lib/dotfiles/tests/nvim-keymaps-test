@@ -36,11 +36,7 @@ _nvim_lua() {
     -c "lua package.path='$NVIM_TEST_LUA_DIR/?.lua;' .. package.path; $1" \
     -c 'qa!' 2>&1)
   _rc=$?
-  # Neovim 0.11 headless messages use CRLF line endings (0.10 and earlier
-  # used LF only). Assertions compare message content, not line discipline,
-  # so normalize CR away here instead of in every caller. Stripping CR is
-  # a no-op on older Neovim output, and no assertion depends on CR bytes.
-  printf '%s' "${_output//$'\r'/}"
+  _nvim_lf "$_output"
   return "$_rc"
 }
 

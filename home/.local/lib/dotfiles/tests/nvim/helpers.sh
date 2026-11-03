@@ -685,6 +685,18 @@ _require_nvim_version() {
   fi
 }
 
+# Print captured headless Neovim output with LF line endings. Before Neovim
+# 0.12, messages printed without a UI (as in --headless) turn each NL into
+# CR NL; 0.12.0 dropped the CR for headless (neovim/neovim#38048). The suites
+# still run on 0.11.2+, so normalize here rather than in every assertion.
+# Only a CR before an NL goes, so a CR the code under test prints mid-line
+# still shows. Command substitution has already dropped the output's trailing
+# NLs, which leaves the CR of a final CR NL at the end; drop that one too.
+_nvim_lf() {
+  local output=${1//$'\r\n'/$'\n'}
+  printf '%s' "${output%$'\r'}"
+}
+
 # ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------

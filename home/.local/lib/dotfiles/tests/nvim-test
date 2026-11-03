@@ -62,11 +62,7 @@ _nvim_lua() {
     -c "lua package.path='$_lua_dir/?.lua;' .. package.path; $1" \
     -c 'qa!' 2>&1)
   _rc=$?
-  # Neovim 0.11 headless messages use CRLF line endings (0.10 and earlier
-  # used LF only). Assertions compare message content, not line discipline,
-  # so normalize CR away here instead of in every caller. Stripping CR is
-  # a no-op on older Neovim output, and no assertion depends on CR bytes.
-  printf '%s' "${_output//$'\r'/}"
+  _nvim_lf "$_output"
   return "$_rc"
 }
 
@@ -304,9 +300,7 @@ bootstrap_output=$(XDG_CONFIG_HOME="$bootstrap_dir/config" \
   XDG_DATA_HOME="$bootstrap_dir/data" PATH="$bootstrap_dir/bin:$PATH" \
   _with_timeout 30 "$NVIM_TEST_BIN" --headless -i NONE '+qa!' 2>&1) ||
   bootstrap_rc=$?
-# Neovim 0.11 headless messages use CRLF line endings; see _nvim_lua.
-# Assertions compare message content, so normalize CR away here.
-bootstrap_output=${bootstrap_output//$'\r'/}
+bootstrap_output=$(_nvim_lf "$bootstrap_output")
 _assert_exit "startup preparation: a failed lazy.nvim clone exits headless Neovim" \
   1 "$bootstrap_rc"
 _assert_contains "startup preparation: a failed lazy.nvim clone reports why" \
@@ -637,6 +631,24 @@ EOF
   _assert_file_content "full-config runs never enable Mason tool installs" \
     "" "$mason_probe/result"
 fi
+
+# ---------------------------------------------------------------------------
+# Tests: headless output normalization
+# ---------------------------------------------------------------------------
+
+echo ""
+echo "=== nvim: headless output normalization ==="
+# A function stands in for pre-0.12 Neovim, which needs no real binary. Its
+# output ends in CR NL, as a final empty message leaves it.
+_nvim_crlf_stub() {
+  printf 'a\r\nb\rc\r\n' >&2
+  return 3
+}
+crlf_rc=0
+crlf_output=$(NVIM_TEST_BIN=_nvim_crlf_stub _nvim_lua '') || crlf_rc=$?
+_assert_eq "headless output: CR NL becomes NL and a lone CR stays" \
+  $'a\nb\rc' "$crlf_output"
+_assert_exit "headless output: normalizing keeps the exit status" 3 "$crlf_rc"
 
 # ---------------------------------------------------------------------------
 # Tests: scheduled Lazy update lock
@@ -1728,7 +1740,7 @@ _clipboard_case() {
     if #sent > 0 and (check == "fresh" or check == "shada") then
       print("unexpected sends " .. table.concat(sent, " "))
     end
-  ' | tr -d '\r'
+  '
 }
 
 # Write a ShaDa file from a session running the given commands; REPLY names it.
