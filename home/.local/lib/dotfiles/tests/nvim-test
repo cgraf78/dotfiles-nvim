@@ -54,13 +54,20 @@ fi
 # Run a lua snippet headlessly in nvim. Prepends the nvim config lua dir
 # to package.path so dofile'd modules can resolve their require() calls.
 _nvim_lua() {
-  local _lua_dir="$HOME/.config/nvim/lua"
+  local _lua_dir="$HOME/.config/nvim/lua" _output _rc
   # Keep headless tests off the user's ShaDa file. `dot test` runs suites in
   # parallel, and concurrent nvim processes can otherwise fight over
   # ~/.local/state/nvim/shada/main.shada.
-  "$NVIM_TEST_BIN" --headless --noplugin -u NONE -i NONE \
+  _output=$("$NVIM_TEST_BIN" --headless --noplugin -u NONE -i NONE \
     -c "lua package.path='$_lua_dir/?.lua;' .. package.path; $1" \
-    -c 'qa!' 2>&1
+    -c 'qa!' 2>&1)
+  _rc=$?
+  # Neovim 0.11 headless messages use CRLF line endings (0.10 and earlier
+  # used LF only). Assertions compare message content, not line discipline,
+  # so normalize CR away here instead of in every caller. Stripping CR is
+  # a no-op on older Neovim output, and no assertion depends on CR bytes.
+  printf '%s' "${_output//$'\r'/}"
+  return "$_rc"
 }
 
 # Run a Lua probe file against the full composed config. Probes report to
@@ -297,6 +304,9 @@ bootstrap_output=$(XDG_CONFIG_HOME="$bootstrap_dir/config" \
   XDG_DATA_HOME="$bootstrap_dir/data" PATH="$bootstrap_dir/bin:$PATH" \
   _with_timeout 30 "$NVIM_TEST_BIN" --headless -i NONE '+qa!' 2>&1) ||
   bootstrap_rc=$?
+# Neovim 0.11 headless messages use CRLF line endings; see _nvim_lua.
+# Assertions compare message content, so normalize CR away here.
+bootstrap_output=${bootstrap_output//$'\r'/}
 _assert_exit "startup preparation: a failed lazy.nvim clone exits headless Neovim" \
   1 "$bootstrap_rc"
 _assert_contains "startup preparation: a failed lazy.nvim clone reports why" \
