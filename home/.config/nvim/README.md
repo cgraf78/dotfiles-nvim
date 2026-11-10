@@ -43,15 +43,16 @@ fallback through `fallback(fn, ...)` so it does not forward again, and an
 overlay that knows its whole host is remote can set
 `vim.g.remote_open_assume_remote = true` to skip the per-session check.
 
-`lua/config/clipboard.lua` gives remote sessions outside tmux a copy-only
-OSC 52 clipboard. A session is remote when `SSH_CONNECTION` or `SSH_TTY` is
-set or an overlay sets `vim.g.remote_open_assume_remote`. 'clipboard' stays
+`lua/config/clipboard.lua` gives terminal sessions that have no clipboard
+tool a copy-only OSC 52 clipboard: SSH or Eternal Terminal sessions outside
+tmux, and root shells from `sudo su` inside tmux, where sudo drops `TMUX` but
+tmux still forwards OSC 52 to the outer terminal. 'clipboard' stays
 `unnamedplus`, which keeps Neovim from picking its own OSC 52 provider; that
 provider would also paste with OSC 52 and wait on terminals such as WezTerm
 that never answer the read. Yanks and deletes go to the local clipboard
 through OSC 52, and `p` puts what this editor session last copied, or before
-then, Neovim's unnamed register, which ShaDa restores across restarts. Local
-sessions, tmux (whose provider already forwards copies), VS Code terminals,
+then, Neovim's unnamed register, which ShaDa restores across restarts.
+tmux (whose provider already forwards copies), VS Code terminals,
 UIs without a terminal such as vscode-neovim, headless runs, an explicit
 `g:clipboard`, and any clipboard tool Neovim finds keep Neovim's own
 provider choice. Neovim 0.11 also counts a running tmux server as such a

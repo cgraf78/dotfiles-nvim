@@ -1604,7 +1604,7 @@ _assert_eq "remote-open: repeated setup wraps the original opener once" "1" "$re
 # ---------------------------------------------------------------------------
 
 echo ""
-echo "=== clipboard: copy-only OSC 52 outside tmux ==="
+echo "=== clipboard: copy-only OSC 52 without a clipboard tool ==="
 
 # Each case's PATH is one of these directories alone, so host tools such as
 # tmux or xclip never reach Neovim's detection. The others hold stand-ins
@@ -1838,10 +1838,19 @@ else
   fi
 fi
 
-_assert_eq "clipboard: local sessions keep Neovim's provider choice" \
-  "provider=nil tool=$no_tool" "$(_clipboard_case none)"
-_assert_eq "clipboard: an empty SSH_CONNECTION, as test/run exports, is not remote" \
-  "provider=nil tool=$no_tool" "$(_clipboard_case none SSH_CONNECTION=)"
+# A root shell from `sudo su` inside tmux looks local: sudo drops TMUX and
+# the SSH variables. tmux still forwards OSC 52, so it gets the provider.
+if [[ $(uname -s) == Darwin ]]; then
+  local_no_tool="provider=nil tool=pbcopy"
+else
+  local_no_tool=$installed
+fi
+_assert_eq "clipboard: a local terminal session without a tool gets the copy-only provider" \
+  "$local_no_tool" "$(_clipboard_case none)"
+_assert_eq "clipboard: a sudo shell inside tmux (TMUX dropped) gets the copy-only provider" \
+  "$local_no_tool" "$(_clipboard_case none TERM=tmux-256color SUDO_USER=user)"
+_assert_eq "clipboard: a local session keeps a working clipboard tool" \
+  "provider=nil tool=$lemonade" "$(_clipboard_case tool)"
 _assert_eq "clipboard: tmux keeps its own provider" \
   "provider=nil tool=$tmux" "$(_clipboard_case tmux "$ssh_tty" TMUX=/tmp/tmux-1/default,1,0)"
 # Even where Neovim's detection would not find tmux, TMUX alone opts out.

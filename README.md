@@ -13,7 +13,8 @@ My Neovim configuration, built on [LazyVim](https://www.lazyvim.org/):
   remote host reached through `termnav ssh`, via
   [termnav](https://github.com/cgraf78/termnav) and the tmux bindings in my
   base dotfiles.
-- A copy-only OSC 52 clipboard for remote sessions outside tmux.
+- A copy-only OSC 52 clipboard for terminal sessions without a clipboard
+  tool, such as SSH sessions outside tmux or `sudo` shells inside it.
 
 The config lives in [`home/.config/nvim/`](home/.config/nvim/); its
 [README](home/.config/nvim/README.md) explains the plugin load order and
