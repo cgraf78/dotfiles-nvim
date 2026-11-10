@@ -1,12 +1,14 @@
--- Copy-only OSC 52 clipboard for remote sessions outside tmux.
+-- Copy-only OSC 52 clipboard for terminal sessions with no clipboard tool.
 --
 -- `options.lua` keeps 'clipboard' at "unnamedplus", which rules out Neovim's
 -- automatic OSC 52 provider: Neovim picks it only while 'clipboard' is empty.
 -- Inside tmux the tmux provider carries copies out (`set-clipboard on`), and
--- a local desktop has pbcopy, wl-copy, or xclip. A direct SSH session
--- outside tmux has none of those, nor does an Eternal Terminal one on a host
--- an overlay marks remote, so yanks never reach the clipboard of the machine
--- the user sits at.
+-- a local desktop has pbcopy, wl-copy, or xclip. A direct SSH or Eternal
+-- Terminal session outside tmux has none of those. Neither does a root shell
+-- from `sudo su` inside tmux: sudo drops TMUX, so Neovim cannot find the
+-- tmux provider, yet tmux still forwards OSC 52 to the outer terminal. In
+-- every such case yanks would otherwise never leave Neovim, so any terminal
+-- session without a tool gets OSC 52, local or remote.
 --
 -- This provider copies with OSC 52 but never pastes with it. Many terminals,
 -- WezTerm included, never answer an OSC 52 read, so every `p` would block
@@ -16,10 +18,6 @@
 local session = require("config.session")
 
 local M = {}
-
-local function remote()
-  return session.assume_remote() or vim.env.SSH_CONNECTION ~= nil or vim.env.SSH_TTY ~= nil
-end
 
 -- OSC 52 needs a terminal. Headless runs (CI, `nvim --headless "+Lazy! sync"`)
 -- have no UI, and embedders such as vscode-neovim and Neovide attach UIs
@@ -63,9 +61,10 @@ function M.wanted()
   if vim.g.clipboard ~= nil or disabled() then
     return false
   end
-  -- tmux has its own provider, VS Code terminals their own clipboard
-  -- handling, local sessions a local clipboard; OSC 52 needs a terminal.
-  if vim.env.TMUX or session.vscode() or not remote() or not terminal() then
+  -- tmux has its own provider and VS Code terminals their own clipboard
+  -- handling; OSC 52 needs a terminal. Remote and local sessions are treated
+  -- alike: one with a working tool keeps it through the detection below.
+  if vim.env.TMUX or session.vscode() or not terminal() then
     return false
   end
   -- Last, because detection loads the provider script and may run a probe
@@ -119,8 +118,7 @@ end
 
 --- Install the copy-only provider when this session needs it.
 ---
---- Call after every overlay has had its chance to set
---- `vim.g.remote_open_assume_remote` or `vim.g.clipboard`.
+--- Call after every overlay has had its chance to set `vim.g.clipboard`.
 function M.setup()
   if not M.wanted() then
     return

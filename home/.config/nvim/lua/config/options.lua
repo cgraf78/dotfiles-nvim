@@ -9,7 +9,7 @@ vim.opt.selectmode:append("mouse")
 -- but that provider also pastes with OSC 52, which WezTerm never answers.
 -- Keep unnamedplus so yanks and Ctrl-C copy go to the clipboard provider:
 -- tmux or a local tool when present, otherwise config.clipboard's copy-only
--- OSC 52 provider in remote sessions.
+-- OSC 52 provider.
 vim.o.clipboard = "unnamedplus"
 
 -- Show leading spaces as dim dots.
