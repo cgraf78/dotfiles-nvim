@@ -63,6 +63,15 @@ for command_name in "${required_commands[@]}"; do
     }
     command_path=$CAPABILITY_TEST_NVIM
   fi
+  # The shared action installs tmux outside the fixed system roots. Admit
+  # just its verified executable to keep the rest of the fixture PATH clean.
+  if [[ $command_name == tmux && -n ${CI_TMUX_PINNED_BIN:-} ]]; then
+    [[ $CI_TMUX_PINNED_BIN == /* && -x $CI_TMUX_PINNED_BIN && ! -d $CI_TMUX_PINNED_BIN ]] || {
+      echo 'CI_TMUX_PINNED_BIN must name an absolute executable' >&2
+      exit 1
+    }
+    command_path=$CI_TMUX_PINNED_BIN
+  fi
   for command_root in "${system_roots[@]}"; do
     [[ -z $command_path ]] || break
     for candidate_name in "${command_candidates[@]}"; do

@@ -46,7 +46,11 @@ grep -Fx 'name: Tests' "$workflow" >/dev/null || fail 'test workflow name drifte
 grep -Fx '    - cron: "23 9 * * *"' "$workflow" >/dev/null || fail 'nightly schedule drifted'
 grep -Fx '      setup: none' "$workflow" >/dev/null || fail 'capability CI must use setup: none'
 grep -Fx '      matrix-set: full' "$workflow" >/dev/null || fail 'capability CI must use the full matrix'
-grep -Fx '      profiles: base,jq,python,lua,neovim,tmux,ripgrep,fd,procps' "$workflow" >/dev/null || fail 'capability prerequisite profile drifted'
+grep -Fx '      profiles: base,jq,python,lua,neovim,tmux-pinned,ripgrep,fd,procps' "$workflow" >/dev/null || fail 'capability CI must use the shared pinned tmux on Linux and macOS'
+grep -Fx '      termux-profiles: base,jq,python,lua,neovim,tmux,ripgrep,fd,procps' "$workflow" >/dev/null || fail 'Termux must exercise its native tmux package'
+# shellcheck disable=SC2016 # Match the literal workflow expansion.
+grep -Fx '        : "${CI_TMUX_PINNED_BIN:?shared tmux-pinned profile did not provide a binary}"' "$workflow" >/dev/null || fail 'desktop CI must require the pinned tmux executable'
+grep -Fx '      termux-command: test/run' "$workflow" >/dev/null || fail 'Termux must run with the native package'
 grep -Fx '    name: cgraf78/actions sync' "$workflow" >/dev/null || fail 'actions-sync job is missing'
 grep -Fx '          persist-credentials: false' "$workflow" >/dev/null || fail 'checkout credentials must not persist'
 if grep -F 'setup: dotfiles' "$workflow" >/dev/null; then fail 'overlay CI must not bootstrap the base dotfiles repository'; fi

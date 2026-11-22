@@ -50,8 +50,11 @@ here defines or changes profile selection.
 
 Suites run on a restricted PATH: only the `required_commands` in `test/run`,
 resolved from `$PREFIX/bin` (Termux), `/opt/homebrew/bin`, `/usr/local/bin`,
-`/usr/bin`, and `/bin`; `~/.local/bin` and mise shims are not visible. A new
-tool needs three paired edits:
+`/usr/bin`, and `/bin`; `~/.local/bin` and mise shims are not visible. On
+Linux and macOS CI, `CI_TMUX_PINNED_BIN` selects the verified tmux from the
+shared `tmux-pinned` profile. Follow the
+[managed tmux update procedure](https://github.com/cgraf78/actions/blob/main/docs/workflow-api.md#updating-the-managed-tmux-build)
+to advance that build. A new tool needs three paired edits:
 `required_commands`, the `profiles:` line in `.github/workflows/test.yml`, and
 the matching `grep -Fx` line in `test/workflow-test`.
 
