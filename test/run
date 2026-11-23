@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_root=$(cd "${BASH_SOURCE[0]%/*}/.." && pwd -P)
+repo_root=$(CDPATH='' cd "${BASH_SOURCE[0]%/*}/.." && pwd -P)
 cd "$repo_root"
 
 # The runner takes no options; reject retired ones such as
