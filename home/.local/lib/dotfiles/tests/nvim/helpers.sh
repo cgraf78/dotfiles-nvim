@@ -334,7 +334,7 @@ _nvim_repo_root() {
       ;;
   esac
 
-  helper_dir=$(cd "${BASH_SOURCE[0]%/*}" && pwd -P)
+  helper_dir=$(CDPATH='' cd "${BASH_SOURCE[0]%/*}" && pwd -P)
   (cd "$helper_dir/../../../../../.." && pwd -P)
 }
 
