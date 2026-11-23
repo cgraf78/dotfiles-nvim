@@ -241,17 +241,22 @@ _test_use_host_runtime_dirs() {
     rm -rf "$XDG_DATA_HOME/nvim/lazy/lazy.nvim.update.lock"
   fi
 
-  if [[ -n ${NVIM_TEST_STATE_HOME:-} ]]; then
-    XDG_STATE_HOME=$NVIM_TEST_STATE_HOME
-  else
-    XDG_STATE_HOME=$(_tmpdir)
-  fi
+  _test_use_nvim_state "${NVIM_TEST_STATE_HOME:-}" || return
   if [[ -n ${NVIM_TEST_CACHE_HOME:-} ]]; then
     XDG_CACHE_HOME=$NVIM_TEST_CACHE_HOME
   else
     XDG_CACHE_HOME=$(_tmpdir)
   fi
-  export XDG_STATE_HOME XDG_CACHE_HOME
+  export XDG_CACHE_HOME
+}
+
+# Native logging also happens with startup config and ShaDa disabled. State
+# may be a caller-specified fixture tree; the native log is always suite-owned.
+_test_use_nvim_state() {
+  XDG_STATE_HOME=${1:-}
+  [[ -n $XDG_STATE_HOME ]] || XDG_STATE_HOME=$(_tmpdir) || return
+  NVIM_LOG_FILE="$_DOT_TEST_TMP_ROOT/nvim.log"
+  export XDG_STATE_HOME NVIM_LOG_FILE
 }
 
 # Copy a directory tree, sharing extents where the filesystem can: GNU cp

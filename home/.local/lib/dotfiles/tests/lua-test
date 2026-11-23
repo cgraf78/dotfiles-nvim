@@ -91,11 +91,30 @@ print("ok")
 LUA
 
 shdeps_log=$(_tmpdir)/shdeps.log
-output=$(DOT_TEST_DEP_FILE_ROOT="$fixture" \
-  SHDEPS_LUA_DIR="$fixture/.local/lib/shdeps" \
-  SHDEPS_TEST_LOG="$shdeps_log" TEST_HOME="$fixture" \
-  "$nvim_bin" --headless --noplugin -u NONE -i NONE -l "$script" 2>&1)
+run_lua_fixture() {
+  _test_use_nvim_state || return
+  DOT_TEST_DEP_FILE_ROOT="$fixture" \
+    SHDEPS_LUA_DIR="$fixture/.local/lib/shdeps" \
+    SHDEPS_TEST_LOG="$shdeps_log" TEST_HOME="$fixture" \
+    "$nvim_bin" --headless --noplugin -u NONE -i NONE -l "$script"
+}
+
+caller=$(_tmpdir)
+caller_log="$caller/native.log"
+control_status=0
+XDG_STATE_HOME="$caller/state" NVIM_LOG_FILE="$caller_log" \
+  "$nvim_bin" --headless --noplugin -u NONE -i NONE -c 'qa!' >/dev/null 2>&1 || control_status=$?
+_assert_exit "Neovim native logger control exits successfully" 0 "$control_status"
+if [[ -f "$caller_log" ]]; then
+  _pass "Neovim native logger control writes to the selected file"
+else
+  _fail "Neovim native logger control did not write to the selected file"
+fi
+rm -f -- "$caller_log"
+
+output=$(XDG_STATE_HOME="$caller/state" NVIM_LOG_FILE="$caller_log" run_lua_fixture 2>&1)
 lua_status=$?
+_assert_file_missing "Lua fixture leaves the caller-selected native log absent" "$caller_log"
 lua_result=$(printf '%s\n' "$output" | awk \
   '{ sub(/\r$/, "") } $0 == "ok" { found="ok" } END { print found }')
 _assert_eq "dot-runtime Shdeps validation exits successfully" "0" "$lua_status"
