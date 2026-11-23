@@ -68,61 +68,63 @@ _capability_dot_release_platform() {
   fi
 }
 
-# Download the resolved Dot release asset plus its .sha256 sidecar, verify
-# the checksum, and extract into $4 (which must already exist and be empty).
-_capability_dot_release_fetch() {
-  local repo=${1:-} tag=${2:-} platform=${3:-} dest=${4:-}
-  local scratch tarball sidecar sum_bin
-  [[ -n $repo && -n $tag && -n $platform && -n $dest ]] || {
-    echo 'Dot release fetch is missing arguments' >&2
+_capability_dot_release_destination() {
+  local dest=$1 operation=$2 entries
+  [[ -n $dest ]] || {
+    echo "Dot release $operation is missing the destination" >&2
     return 1
   }
-  [[ -d $dest ]] || {
-    echo "Dot release destination is missing: $dest" >&2
+  mkdir -p "$dest" || return
+  entries=$(ls -A "$dest") || return
+  [[ -z $entries ]] || {
+    echo "refusing to $operation into a nonempty directory: $dest" >&2
     return 1
   }
-  [[ -z $(ls -A "$dest") ]] || {
-    echo "refusing to extract into a nonempty directory: $dest" >&2
+}
+
+# Bind the digest to the archive selected by the caller. A sidecar cannot
+# make us hash any other file, even when that file's own digest is valid.
+capability_dot_release_verify_checksum() {
+  local archive=$1 sidecar=$2 name expected actual
+  name=${archive##*/}
+  expected=$(awk -v name="$name" '
+    substr($0, 65, 2) ~ /^ [ *]$/ && substr($0, 67) == name {
+      matches++
+      digest = substr($0, 1, 64)
+    }
+    END {
+      if (matches != 1 || digest !~ /^[[:xdigit:]]+$/) exit 1
+      print tolower(digest)
+    }
+  ' "$sidecar") || {
+    echo "checksum mismatch for $name (expected one record for this archive)" >&2
     return 1
   }
   if command -v sha256sum >/dev/null 2>&1; then
-    sum_bin=sha256sum
+    actual=$(sha256sum <"$archive") || return
   elif command -v shasum >/dev/null 2>&1; then
-    sum_bin='shasum -a 256'
+    actual=$(shasum -a 256 <"$archive") || return
   else
     echo 'sha256sum or shasum is required' >&2
     return 1
   fi
-  tarball=dot-$tag-$platform.tar.gz
-  sidecar=$tarball.sha256
-  scratch=$(mktemp -d) || return 1
-  # A RETURN trap set inside a function stays installed after it fires. Clear
-  # it as it runs so a failure here cannot rerun the cleanup, with `scratch`
-  # out of scope, when the caller's function returns under `set -u`.
-  trap 'rm -rf -- "$scratch"; trap - RETURN' RETURN
-  curl --fail --silent --show-error --location \
-    --connect-timeout 10 --max-time 120 \
-    --retry 2 --retry-delay 2 --retry-max-time 65 --retry-all-errors \
-    "https://github.com/$repo/releases/download/$tag/$tarball" \
-    -o "$scratch/$tarball" || {
-    echo "could not download $tarball" >&2
+  [[ ${actual%% *} == "$expected" ]] || {
+    echo "checksum mismatch for $name" >&2
     return 1
   }
-  curl --fail --silent --show-error --location \
-    --connect-timeout 10 --max-time 60 \
-    --retry 2 --retry-delay 2 --retry-max-time 65 --retry-all-errors \
-    "https://github.com/$repo/releases/download/$tag/$sidecar" \
-    -o "$scratch/$sidecar" || {
-    echo "could not download $sidecar" >&2
+}
+
+# Extract an already verified archive into an empty destination. A caller
+# crossing a privilege boundary must keep the staged archive read-only.
+capability_dot_release_extract() {
+  local archive=${1:-} dest=${2:-}
+  [[ -f $archive && ! -L $archive ]] || {
+    echo "invalid staged Dot release archive: $archive" >&2
     return 1
   }
-  # shellcheck disable=SC2086 # The checksum command is selected above.
-  (cd "$scratch" && $sum_bin -c "$sidecar") >/dev/null || {
-    echo "checksum mismatch for $tarball" >&2
-    return 1
-  }
-  tar -xzf "$scratch/$tarball" -C "$dest" || {
-    echo "could not extract $tarball" >&2
+  _capability_dot_release_destination "$dest" extract || return
+  tar -xzf "$archive" -C "$dest" || {
+    echo "could not extract ${archive##*/}" >&2
     return 1
   }
   if [[ -e $dest/.shdeps-release-layout || -L $dest/.shdeps-release-layout ]]; then
@@ -143,7 +145,8 @@ _capability_dot_release_latest_tag() {
     return 1
   }
   _capability_dot_release_valid_repo "$repo" || return 1
-  effective=$(curl -fsSIL -o /dev/null -w '%{url_effective}' \
+  effective=$(curl -q -fsSIL -o /dev/null -w '%{url_effective}' \
+    --proto '=https' --proto-redir '=https' --connect-timeout 10 --max-time 30 \
     --retry 2 --retry-delay 2 --retry-max-time 65 --retry-all-errors \
     "https://github.com/$repo/releases/latest") || {
     echo "could not resolve the latest Dot release for $repo" >&2
@@ -161,16 +164,10 @@ _capability_dot_release_latest_tag() {
   printf '%s\n' "$tag"
 }
 
-# Resolve, download, verify, and extract the requested Dot release into DEST,
-# which is created when absent and must otherwise be empty. The request comes
-# from DOT_TEST_DOT_RELEASE_TAG (default: latest) and DOT_TEST_DOT_RELEASE_REPO
-# (default: cgraf78/dot) so every consumer exposes the same override contract.
-capability_dot_release_install() {
-  local dest=${1:-} request repo tag platform
-  [[ -n $dest ]] || {
-    echo 'Dot release install is missing the destination' >&2
-    return 1
-  }
+# Download and verify a requested release into an empty DEST. Print its
+# absolute archive path so a separate, credential-free worker can extract it.
+capability_dot_release_stage() (
+  local dest=${1:-} request repo tag platform scratch tarball sidecar
   request=${DOT_TEST_DOT_RELEASE_TAG:-latest}
   repo=${DOT_TEST_DOT_RELEASE_REPO:-cgraf78/dot}
   _capability_dot_release_valid_repo "$repo" || return 1
@@ -184,6 +181,38 @@ capability_dot_release_install() {
     return 1
   }
   platform=$(_capability_dot_release_platform) || return 1
-  mkdir -p "$dest" || return 1
-  _capability_dot_release_fetch "$repo" "$tag" "$platform" "$dest"
-}
+  _capability_dot_release_destination "$dest" stage || return
+  dest=$(cd -P -- "$dest" && pwd -P) || return
+  scratch=$(mktemp -d "$dest/.dot-release.XXXXXX") || return
+  trap 'rm -rf -- "$scratch"' EXIT
+  # shellcheck source=./github-release.sh
+  . "$(dirname -- "${BASH_SOURCE[0]}")/github-release.sh" || return
+  tarball=dot-$tag-$platform.tar.gz
+  sidecar=$tarball.sha256
+  github_release_download "$repo" "$tag" "$tarball" "$scratch/$tarball" \
+    --connect-timeout 10 --max-time 120 \
+    --retry 2 --retry-delay 2 --retry-max-time 65 --retry-all-errors || {
+    echo "could not download $tarball" >&2
+    return 1
+  }
+  github_release_download "$repo" "$tag" "$sidecar" "$scratch/$sidecar" \
+    --connect-timeout 10 --max-time 60 \
+    --retry 2 --retry-delay 2 --retry-max-time 65 --retry-all-errors || {
+    echo "could not download $sidecar" >&2
+    return 1
+  }
+  capability_dot_release_verify_checksum "$scratch/$tarball" "$scratch/$sidecar" || return
+  mv -f -- "$scratch/$tarball" "$dest/$tarball" || return
+  printf '%s\n' "$dest/$tarball"
+)
+
+# Keep the ordinary install entry point for callers that do not need to
+# separate the authenticated download and extraction processes.
+capability_dot_release_install() (
+  local dest=${1:-} scratch archive
+  _capability_dot_release_destination "$dest" extract || return
+  scratch=$(mktemp -d) || return
+  trap 'rm -rf -- "$scratch"' EXIT
+  archive=$(capability_dot_release_stage "$scratch") || return
+  capability_dot_release_extract "$archive" "$dest"
+)
