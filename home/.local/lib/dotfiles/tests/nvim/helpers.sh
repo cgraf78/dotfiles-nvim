@@ -206,7 +206,8 @@ _assert_eq_realpath_lines() {
 # to load only what the copy holds.
 # shellcheck disable=SC2034 # NVIM_TEST_PLUGIN_INSTALL_DISABLED is read by callers.
 _test_use_host_runtime_dirs() {
-  local dependency_home="${DOT_TEST_HOST_HOME:-$HOME}" host_data entry link target
+  local dependency_home="${DOT_TEST_HOST_HOME:-$HOME}" host_data entry source link target link_inventory
+  local lazy_source='' site_source='' private_entry private_target target_dir visible_target
 
   host_data="${XDG_DATA_HOME:-$dependency_home/.local/share}/nvim"
   XDG_CONFIG_HOME="$HOME/.config"
@@ -220,32 +221,75 @@ _test_use_host_runtime_dirs() {
     # Publish the private root and the install guard before seeding, so a
     # failed copy can never leave Neovim installing into the caller's data.
     NVIM_TEST_PLUGIN_INSTALL_DISABLED=1
-    XDG_DATA_HOME=$(_tmpdir)
+    XDG_DATA_HOME=$(_tmpdir) || return 1
     export XDG_DATA_HOME
     mkdir -p "$XDG_DATA_HOME/nvim" || return 1
     # `lazy` holds the plugins and `site` the compiled Tree-sitter parsers;
     # without the parsers a full-config start would try to build them.
     for entry in lazy site; do
       [[ -d $host_data/$entry ]] || continue
-      _test_copy_tree "$host_data/$entry" "$XDG_DATA_HOME/nvim/$entry" || return 1
+      # Copy the directory even when the host redirects it through a symlink.
+      # Leaving that symlink in the fixture would make lock removal mutate
+      # the host before the first editor process starts.
+      source=$(CDPATH='' cd -P -- "$host_data/$entry" && pwd -P && printf '.') || return 1
+      source=${source%$'\n.'}
+      private_entry="$XDG_DATA_HOME/nvim/$entry"
+      _test_copy_tree "$source" "$private_entry" || return 1
+      [[ -d "$private_entry" && ! -L "$private_entry" ]] || return 1
+      if [[ $entry == lazy ]]; then
+        lazy_source=$source
+      else
+        site_source=$source
+      fi
     done
     # Tree-sitter links its queries into `site` by absolute path; point the
     # copies at the private plugin tree so nothing resolves into the host's.
-    while IFS= read -r link; do
-      target=$(readlink "$link") || return 1
-      [[ $target == "$host_data"/* ]] || continue
-      ln -sfn "$XDG_DATA_HOME/nvim/${target#"$host_data"/}" "$link" || return 1
-    done < <(find "$XDG_DATA_HOME/nvim" -type l)
+    # A failed or partial traversal cannot prove the remaining links are safe.
+    link_inventory=$(_tmpfile) || return 1
+    find "$XDG_DATA_HOME/nvim" -type l -print0 >"$link_inventory" || return 1
+    while IFS= read -r -d '' link; do
+      # GNU and macOS readlink append different delimiters when a target
+      # ends in a newline. Ask for only the target before adding our marker.
+      target=$(readlink -n "$link" && printf '.') || return 1
+      target=${target%.}
+      case $target in
+        "$host_data/lazy" | "$host_data/lazy/"* | "$host_data/site" | "$host_data/site/"*)
+          private_target=${target#"$host_data"/}
+          ;;
+        /*)
+          # An absolute link may use a visible alias of a redirected source
+          # directory. Resolve only its parent so the final link name stays
+          # intact even when it is itself a symlink or is missing.
+          visible_target=$target
+          target_dir=${target%/*}
+          if target_dir=$(CDPATH='' cd -P -- "${target_dir:-/}" 2>/dev/null && pwd -P && printf '.'); then
+            target_dir=${target_dir%$'\n.'}
+            target="${target_dir%/}/${target##*/}"
+          fi
+          if [[ -n $lazy_source && ($target == "$lazy_source" || $target == "$lazy_source"/*) ]]; then
+            private_target="lazy${target#"$lazy_source"}"
+          elif [[ -n $site_source && ($target == "$site_source" || $target == "$site_source"/*) ]]; then
+            private_target="site${target#"$site_source"}"
+          elif [[ $visible_target == "$host_data"/* ]]; then
+            private_target=${visible_target#"$host_data"/}
+          else
+            continue
+          fi
+          ;;
+        *) continue ;;
+      esac
+      ln -sfn "$XDG_DATA_HOME/nvim/$private_target" "$link" || return 1
+    done <"$link_inventory"
     # A copy taken mid-update would make every full-config start wait for an
     # updater that will never finish here.
-    rm -rf "$XDG_DATA_HOME/nvim/lazy/lazy.nvim.update.lock"
+    rm -rf "$XDG_DATA_HOME/nvim/lazy/lazy.nvim.update.lock" || return 1
   fi
 
   _test_use_nvim_state "${NVIM_TEST_STATE_HOME:-}" || return
   if [[ -n ${NVIM_TEST_CACHE_HOME:-} ]]; then
     XDG_CACHE_HOME=$NVIM_TEST_CACHE_HOME
   else
-    XDG_CACHE_HOME=$(_tmpdir)
+    XDG_CACHE_HOME=$(_tmpdir) || return 1
   fi
   export XDG_CACHE_HOME
 }

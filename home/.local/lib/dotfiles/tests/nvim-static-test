@@ -2,5 +2,62 @@
 set -u
 . "${BASH_SOURCE[0]%/*}/nvim/helpers.sh"
 . "${BASH_SOURCE[0]%/*}/nvim/static.sh"
+
+_seed_runtime_fixture() (
+  local mode=$1 host_data lazy_source site_source plugin
+  local link_name=query plugin_name=query.scm
+  host_data=$(_tmpdir) || exit 1
+  lazy_source="$host_data/nvim/lazy"
+  site_source="$host_data/nvim/site"
+  case $mode in
+    newline)
+      link_name=$'query\nfixture'
+      plugin_name+=$'\n'
+      ;;
+    redirected)
+      lazy_source=$(_tmpdir)/$'lazy\n' || exit 1
+      site_source=$(_tmpdir)/$'site\n' || exit 1
+      mkdir -p "$host_data/nvim" "$lazy_source/lazy.nvim.update.lock" || exit 1
+      printf 'owned by the host\n' >"$lazy_source/lazy.nvim.update.lock/sentinel" || exit 1
+      ln -s "$lazy_source" "$host_data/nvim/lazy" || exit 1
+      ln -s "$site_source" "$host_data/nvim/site" || exit 1
+      ;;
+    find-failure)
+      # shellcheck disable=SC2329 # Called by the runtime helper sourced above.
+      find() {
+        printf '%s\n' 'fixture link traversal failure' >&2
+        return 17
+      }
+      ;;
+  esac
+  plugin="$lazy_source/test-plugin/$plugin_name"
+  mkdir -p "${plugin%/*}" "$site_source" || exit 1
+  : >"$plugin" || exit 1
+  ln -s "$plugin" "$site_source/$link_name" || exit 1
+  export XDG_DATA_HOME=$host_data
+  unset NVIM_TEST_DATA_HOME NVIM_TEST_STATE_HOME NVIM_TEST_CACHE_HOME
+
+  _test_use_host_runtime_dirs || exit 1
+  [[ $mode != find-failure ]] || exit 0
+  if [[ $mode == redirected ]]; then
+    [[ -f "$lazy_source/lazy.nvim.update.lock/sentinel" &&
+      ! -e "$XDG_DATA_HOME/nvim/lazy/lazy.nvim.update.lock" &&
+      ! -L "$XDG_DATA_HOME/nvim/lazy" && ! -L "$XDG_DATA_HOME/nvim/site" ]] || exit 1
+  fi
+  python3 -c 'import os, sys; raise SystemExit(os.readlink(sys.argv[1]) != sys.argv[2] or os.readlink(sys.argv[3]) != sys.argv[4])' \
+    "$XDG_DATA_HOME/nvim/site/$link_name" "$XDG_DATA_HOME/nvim/lazy/test-plugin/$plugin_name" \
+    "$site_source/$link_name" "$plugin"
+)
+
+seed_status=0
+seed_output=$(_seed_runtime_fixture find-failure 2>&1) || seed_status=$?
+_assert_exit 'editor seed rejects a failed symlink inventory' 1 "$seed_status"
+_assert_contains 'editor seed reports a failed symlink inventory' \
+  'fixture link traversal failure' "$seed_output"
+nvim_test_assert 'editor seed rewrites newline-named links only in the private copy' \
+  _seed_runtime_fixture newline
+nvim_test_assert 'editor seed copies redirected directories privately and preserves the host lock' \
+  _seed_runtime_fixture redirected
+
 nvim_test_static
 nvim_test_finish
