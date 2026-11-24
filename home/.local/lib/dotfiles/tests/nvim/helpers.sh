@@ -746,6 +746,87 @@ _nvim_lf() {
   printf '%s' "${output%$'\r'}"
 }
 
+# Allocate the suite's headless runtime before any case restricts PATH to its
+# tool doubles. Keep an absolute name for the socket even if a Lua test chdirs.
+_test_use_headless_runtime() {
+  local interrupted=0 status=0
+  # Give an in-flight allocator time to publish the path before the suite's
+  # usual EXIT cleanup runs, including on a foreground process-group signal.
+  trap '((interrupted != 0)) || interrupted=129' HUP
+  trap '((interrupted != 0)) || interrupted=130' INT
+  trap '((interrupted != 0)) || interrupted=143' TERM
+  _make_headless_runtime || status=$?
+  trap - HUP INT TERM
+  ((interrupted == 0)) || return "$interrupted"
+  return "$status"
+}
+
+_make_headless_runtime() {
+  local tmp_base=${DOT_TEST_SYSTEM_TMPDIR:-${TMPDIR:-/tmp}} runtime alias short_tmp=/tmp LC_ALL=C
+  [[ $tmp_base == /* ]] || tmp_base="$PWD/$tmp_base"
+  runtime=$(
+    trap '' HUP INT TERM
+    mktemp -d "${tmp_base%/}/n.XXXXXXXX"
+  ) || return 1
+  CLEANUP_DIRS+=("$runtime")
+  NVIM_TEST_RUNTIME_DIR=$runtime
+  # Neovim generates its socket basename. Also keep the spelling shell-safe
+  # for Neovim's own wildcard expansion response files.
+  if ((${#runtime} + 28 >= 104)) || [[ $runtime == *[![:alnum:]_./-]* ]]; then
+    if [[ ! -w $short_tmp && -n ${PREFIX:-} ]]; then
+      short_tmp="$PREFIX/tmp"
+    fi
+    alias=$(
+      trap '' HUP INT TERM
+      mktemp -d "$short_tmp/n.XXXXXXXX"
+    ) || return 1
+    CLEANUP_DIRS+=("$alias")
+    if ((${#alias} + 2 + 28 >= 104)); then
+      printf 'test harness: cannot create a short Neovim runtime path under %s\n' "$short_tmp" >&2
+      return 1
+    fi
+    ln -s "$runtime" "$alias/r" || return 1
+    NVIM_TEST_RUNTIME_DIR="$alias/r"
+  fi
+  XDG_RUNTIME_DIR=$NVIM_TEST_RUNTIME_DIR
+  TMPDIR=$NVIM_TEST_RUNTIME_DIR
+  export XDG_RUNTIME_DIR TMPDIR
+  unset NVIM NVIM_APPNAME NVIM_LISTEN_ADDRESS
+}
+
+# Keep editor message formatting and exit behavior identical across suites.
+# Passing code and paths separately avoids shell interpolation in Lua.
+_nvim_lua() (
+  local output status=0
+  unset NVIM NVIM_APPNAME NVIM_LISTEN_ADDRESS
+  output=$(XDG_RUNTIME_DIR="$NVIM_TEST_RUNTIME_DIR" TMPDIR="$NVIM_TEST_RUNTIME_DIR" \
+    NVIM_LOG_FILE="$NVIM_TEST_RUNTIME_DIR/native.log" \
+    NVIM_TEST_LUA_DIR="$NVIM_TEST_LUA_DIR" NVIM_TEST_LUA_SOURCE="$1" \
+    "$NVIM_TEST_BIN" --headless --noplugin -u NONE -i NONE -c 'lua
+      local ok = xpcall(function()
+        local fixture_dir = vim.env.NVIM_TEST_LUA_DIR
+        -- Keep preload stubs first. A literal path also permits the
+        -- characters that Lua treats as package.path syntax.
+        table.insert(package.loaders, 2, function(module)
+          local filename = fixture_dir .. "/" .. module:gsub("%.", "/") .. ".lua"
+          if vim.fn.filereadable(filename) == 1 then
+            return assert(loadfile(filename))
+          end
+          return "\n\tno fixture module at " .. filename
+        end)
+        assert(loadstring(vim.env.NVIM_TEST_LUA_SOURCE, "=Neovim fixture"))()
+      end, function(err)
+        io.stderr:write(debug.traceback(tostring(err), 2), "\n")
+      end)
+      if not ok then vim.cmd("cquit 1") end
+    ' -c 'qa!' 2>&1) || status=$?
+  if ((status != 0)); then
+    _nvim_lf "$output" >&2
+    return "$status"
+  fi
+  _nvim_lf "$output"
+)
+
 # ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------

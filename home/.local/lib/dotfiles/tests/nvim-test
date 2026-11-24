@@ -23,6 +23,8 @@ _test_use_host_shdeps
 _test_managed_nvim_bin || exit 1
 NVIM_TEST_BIN=$REPLY
 _require_nvim_version "nvim-test" "$NVIM_TEST_BIN"
+export NVIM_TEST_LUA_DIR=$HOME/.config/nvim/lua
+_test_use_headless_runtime || exit "$?"
 
 # Resolve dependencies against the configuration under test, not the host's
 # previously installed copy. This matters whenever a dotfiles branch introduces
@@ -51,31 +53,20 @@ if [[ $NVIM_TEST_PLUGIN_INSTALL_DISABLED == 1 ]]; then
   NVIM_FULL_CONFIG_CMD+='; vim.g.plugin_install_disabled = true'
 fi
 
-# Run a lua snippet headlessly in nvim. Prepends the nvim config lua dir
-# to package.path so dofile'd modules can resolve their require() calls.
-_nvim_lua() {
-  local _lua_dir="$HOME/.config/nvim/lua" _output _rc
-  # Keep headless tests off the user's ShaDa file. `dot test` runs suites in
-  # parallel, and concurrent nvim processes can otherwise fight over
-  # ~/.local/state/nvim/shada/main.shada.
-  _output=$("$NVIM_TEST_BIN" --headless --noplugin -u NONE -i NONE \
-    -c "lua package.path='$_lua_dir/?.lua;' .. package.path; $1" \
-    -c 'qa!' 2>&1)
-  _rc=$?
-  _nvim_lf "$_output"
-  return "$_rc"
-}
-
 # Run a Lua probe file against the full composed config. Probes report to
 # the file named by NVIM_TEST_PROBE_FILE rather than stdout, because loading
 # plugins can print notifications that are environment noise here.
 _nvim_full_config_probe() {
-  local result_file="$1" probe_file="$2"
-  NVIM_TEST_PROBE_FILE=$result_file "$NVIM_TEST_BIN" --headless -i NONE \
-    --cmd "$NVIM_FULL_CONFIG_CMD" \
-    -u "$HOME/.config/nvim/init.lua" \
-    -c "luafile $probe_file" \
-    -c 'qa!' >/dev/null 2>&1
+  local result_file="$1" probe_file="$2" output
+  output=$(NVIM_TEST_PROBE_FILE=$result_file NVIM_TEST_PROBE_SOURCE=$probe_file \
+    "$NVIM_TEST_BIN" --headless -i NONE --cmd "$NVIM_FULL_CONFIG_CMD" \
+    -u "$HOME/.config/nvim/init.lua" -c 'lua
+      local ok, err = xpcall(function() dofile(vim.env.NVIM_TEST_PROBE_SOURCE) end, debug.traceback)
+      if not ok then
+        io.stderr:write(tostring(err), "\n")
+        vim.cmd("cquit 1")
+      end
+    ' -c 'qa!' 2>&1) || _fail "nvim: full-config probe failed for $probe_file: $(_nvim_lf "$output")"
 }
 
 # Keep one full-config smoke test in this suite. Most tests use `--noplugin`
@@ -664,7 +655,7 @@ _nvim_crlf_stub() {
   return 3
 }
 crlf_rc=0
-crlf_output=$(NVIM_TEST_BIN=_nvim_crlf_stub _nvim_lua '') || crlf_rc=$?
+crlf_output=$(NVIM_TEST_BIN=_nvim_crlf_stub _nvim_lua '' 2>&1) || crlf_rc=$?
 _assert_eq "headless output: CR NL becomes NL and a lone CR stays" \
   $'a\nb\rc' "$crlf_output"
 _assert_exit "headless output: normalizing keeps the exit status" 3 "$crlf_rc"
@@ -727,8 +718,13 @@ _assert_eq "Lazy update lock: updater itself does not wait on its lock" $'true\n
 echo ""
 echo "=== editor plugins ==="
 
-result=$(rg -n "vim\\.keymap\\.set" "$HOME/.config/nvim/lua/plugins" || true)
-_assert_eq "keymaps: plugin specs avoid raw keymap setters" "" "$result"
+scan_status=0
+result=$(rg -n "vim\\.keymap\\.set" "$HOME/.config/nvim/lua/plugins") || scan_status=$?
+if ((scan_status > 1)); then
+  _fail "keymaps: could not scan plugin specs (rg exited $scan_status)"
+else
+  _assert_eq "keymaps: plugin specs avoid raw keymap setters" "" "$result"
+fi
 
 result=$(_nvim_lua '
   local specs = dofile(vim.fn.expand("~/.config/nvim/lua/plugins/workspace.lua"))
@@ -776,6 +772,7 @@ result=$(_nvim_lua '
 _assert_eq "nvim-workspace: plugin config calls public setup" "true" "$result"
 
 PERSISTENCE_BRANCH_TMP=$(_tmpdir)
+export PERSISTENCE_BRANCH_TMP
 mkdir -p \
   "$PERSISTENCE_BRANCH_TMP/repo/.git" \
   "$PERSISTENCE_BRANCH_TMP/detached/.git" \
@@ -797,13 +794,13 @@ result=$(PATH="$PERSISTENCE_BRANCH_BIN:$PATH" \
   PERSISTENCE_BRANCH_GIT_MARKER="$PERSISTENCE_BRANCH_GIT_MARKER" \
   _nvim_lua "
   local config = require('config.nvim-workspace')
-  print(config.persistence_branch('$PERSISTENCE_BRANCH_TMP/repo'))
-  print(config.persistence_branch('$PERSISTENCE_BRANCH_TMP/worktree'))
-  print(tostring(config.persistence_branch('$PERSISTENCE_BRANCH_TMP/detached')))
-  print(tostring(config.persistence_branch('$PERSISTENCE_BRANCH_TMP/repo/.git')))
-  vim.fn.writefile({ 'ref: refs/heads/switched' }, '$PERSISTENCE_BRANCH_TMP/repo/.git/HEAD')
-  print(config.persistence_branch('$PERSISTENCE_BRANCH_TMP/repo'))
-  vim.cmd('cd ' .. vim.fn.fnameescape('$PERSISTENCE_BRANCH_TMP/repo'))
+  print(config.persistence_branch(vim.env.PERSISTENCE_BRANCH_TMP .. '/repo'))
+  print(config.persistence_branch(vim.env.PERSISTENCE_BRANCH_TMP .. '/worktree'))
+  print(tostring(config.persistence_branch(vim.env.PERSISTENCE_BRANCH_TMP .. '/detached')))
+  print(tostring(config.persistence_branch(vim.env.PERSISTENCE_BRANCH_TMP .. '/repo/.git')))
+  vim.fn.writefile({ 'ref: refs/heads/switched' }, vim.env.PERSISTENCE_BRANCH_TMP .. '/repo/.git/HEAD')
+  print(config.persistence_branch(vim.env.PERSISTENCE_BRANCH_TMP .. '/repo'))
+  vim.cmd('cd ' .. vim.fn.fnameescape(vim.env.PERSISTENCE_BRANCH_TMP .. '/repo'))
   print(config.persistence_branch())
 ")
 expected="$(printf 'feature/fast-sessions\nworktree-branch\nnil\nnil\nswitched\nswitched')"
@@ -824,7 +821,7 @@ result=$(_nvim_lua "
     if spec[1] == 'folke/persistence.nvim' then
       spec.config(nil, {})
       print(tostring(persistence.branch == require('config.nvim-workspace').persistence_branch))
-      print(persistence.branch('$PERSISTENCE_BRANCH_TMP/repo'))
+      print(persistence.branch(vim.env.PERSISTENCE_BRANCH_TMP .. '/repo'))
       return
     end
   end
@@ -1144,6 +1141,7 @@ _assert_eq "nvim-workspace: dotfiles passes session, shell, and navigation polic
   "$expected" "$result"
 
 WORKSPACE_ROOT_TMP=$(_tmpdir)
+export WORKSPACE_ROOT_TMP
 mkdir -p "$WORKSPACE_ROOT_TMP/project/src" "$WORKSPACE_ROOT_TMP/project/.git"
 WORKSPACE_ROOT_BIN=$(_tmpdir)
 cat >"$WORKSPACE_ROOT_BIN/sley" <<'EOF'
@@ -1155,13 +1153,14 @@ chmod +x "$WORKSPACE_ROOT_BIN/sley"
 result=$(PATH="$WORKSPACE_ROOT_BIN:$PATH" _nvim_lua "
   local opts = require('config.nvim-workspace').options()
   print(type(opts.workspace.repo_root_detector))
-  print(opts.workspace.repo_root_detector('$WORKSPACE_ROOT_TMP/project/src'))
+  print(opts.workspace.repo_root_detector(vim.env.WORKSPACE_ROOT_TMP .. '/project/src'))
 ")
 expected="$(printf 'function\n%s' "$WORKSPACE_ROOT_TMP/project")"
 _assert_eq "nvim-workspace: dotfiles root detector prefers marker roots without sley" \
   "$expected" "$result"
 
 WORKSPACE_GENERIC_TMP=$(_tmpdir)
+export WORKSPACE_GENERIC_TMP
 WORKSPACE_GENERIC_BIN=$(_tmpdir)
 WORKSPACE_GENERIC_SLEY_LOG=$(_tmpdir)/sley-called
 mkdir -p "$WORKSPACE_GENERIC_TMP/plain"
@@ -1174,7 +1173,7 @@ chmod +x "$WORKSPACE_GENERIC_BIN/sley"
 result=$(WORKSPACE_GENERIC_SLEY_LOG="$WORKSPACE_GENERIC_SLEY_LOG" \
   PATH="$WORKSPACE_GENERIC_BIN:$PATH" _nvim_lua "
   local opts = require('config.nvim-workspace').options()
-  print(tostring(opts.workspace.repo_root_detector('$WORKSPACE_GENERIC_TMP/plain')))
+  print(tostring(opts.workspace.repo_root_detector(vim.env.WORKSPACE_GENERIC_TMP .. '/plain')))
   print(tostring(opts.lazygit))
 ")
 expected="$(printf 'nil\nnil')"
@@ -1184,6 +1183,7 @@ _assert_file_missing "nvim-workspace: editor policy never invokes Sley" \
   "$WORKSPACE_GENERIC_SLEY_LOG"
 
 WORKSPACE_HOME_TMP=$(_tmpdir)
+export WORKSPACE_HOME_TMP
 mkdir -p "$WORKSPACE_HOME_TMP/.dotfiles" "$WORKSPACE_HOME_TMP/.config/shell"
 touch "$WORKSPACE_HOME_TMP/.dotfiles/index"
 WORKSPACE_HOME_BIN=$(_tmpdir)
@@ -1223,13 +1223,13 @@ chmod +x "$WORKSPACE_HOME_BIN/git"
 chmod +x "$WORKSPACE_HOME_BIN/sley"
 result=$(WORKSPACE_HOME_GIT_LOG="$WORKSPACE_HOME_GIT_LOG" \
   PATH="$WORKSPACE_HOME_BIN:$PATH" _nvim_lua "
-  vim.env.HOME = '$WORKSPACE_HOME_TMP'
+  vim.env.HOME = vim.env.WORKSPACE_HOME_TMP
   local opts = require('config.nvim-workspace').options()
   print(type(opts.workspace.home_workspace_detector))
-  print(tostring(opts.workspace.repo_root_detector('$WORKSPACE_HOME_TMP')))
-  print(tostring(opts.workspace.repo_root_detector('$WORKSPACE_HOME_TMP/.config/shell')))
-  print(opts.workspace.home_workspace_detector('$WORKSPACE_HOME_TMP/.config/shell'))
-  print(opts.workspace.home_workspace_detector('$WORKSPACE_HOME_TMP/.config/shell'))
+  print(tostring(opts.workspace.repo_root_detector(vim.env.WORKSPACE_HOME_TMP)))
+  print(tostring(opts.workspace.repo_root_detector(vim.env.WORKSPACE_HOME_TMP .. '/.config/shell')))
+  print(opts.workspace.home_workspace_detector(vim.env.WORKSPACE_HOME_TMP .. '/.config/shell'))
+  print(opts.workspace.home_workspace_detector(vim.env.WORKSPACE_HOME_TMP .. '/.config/shell'))
 ")
 expected="$(printf 'function\nnil\nnil\n%s\n%s' "$WORKSPACE_HOME_TMP" "$WORKSPACE_HOME_TMP")"
 _assert_eq "nvim-workspace: dotfiles home detector uses tracked paths without sley" \
@@ -1240,15 +1240,15 @@ _assert_eq "nvim-workspace: repeated tracked HOME lookup reuses index result" \
 : >"$WORKSPACE_HOME_GIT_LOG"
 result=$(WORKSPACE_HOME_GIT_LOG="$WORKSPACE_HOME_GIT_LOG" \
   PATH="$WORKSPACE_HOME_BIN:$PATH" _nvim_lua "
-  vim.env.HOME = '$WORKSPACE_HOME_TMP'
+  vim.env.HOME = vim.env.WORKSPACE_HOME_TMP
   local detector = require('config.nvim-workspace').options().workspace.home_workspace_detector
-  print(detector('$WORKSPACE_HOME_TMP/.config/shell'))
-  vim.fn.writefile({ 'replacement' }, '$WORKSPACE_HOME_TMP/.dotfiles/index.next')
+  print(detector(vim.env.WORKSPACE_HOME_TMP .. '/.config/shell'))
+  vim.fn.writefile({ 'replacement' }, vim.env.WORKSPACE_HOME_TMP .. '/.dotfiles/index.next')
   assert(vim.uv.fs_rename(
-    '$WORKSPACE_HOME_TMP/.dotfiles/index.next',
-    '$WORKSPACE_HOME_TMP/.dotfiles/index'
+    vim.env.WORKSPACE_HOME_TMP .. '/.dotfiles/index.next',
+    vim.env.WORKSPACE_HOME_TMP .. '/.dotfiles/index'
   ))
-  print(detector('$WORKSPACE_HOME_TMP/.config/shell'))
+  print(detector(vim.env.WORKSPACE_HOME_TMP .. '/.config/shell'))
 ")
 expected="$(printf '%s\n%s' "$WORKSPACE_HOME_TMP" "$WORKSPACE_HOME_TMP")"
 _assert_eq "nvim-workspace: atomic index replacement preserves tracked result" \
@@ -1257,6 +1257,7 @@ _assert_eq "nvim-workspace: atomic index replacement invalidates HOME lookup" \
   "2" "$(wc -l <"$WORKSPACE_HOME_GIT_LOG" | tr -d ' ')"
 
 WORKSPACE_RETRY_HOME=$(_tmpdir)
+export WORKSPACE_RETRY_HOME
 WORKSPACE_RETRY_BIN=$(_tmpdir)
 WORKSPACE_RETRY_STATE=$(_tmpdir)/state
 mkdir -p "$WORKSPACE_RETRY_HOME/.dotfiles" "$WORKSPACE_RETRY_HOME/.config/shell"
@@ -1272,16 +1273,17 @@ EOF
 chmod +x "$WORKSPACE_RETRY_BIN/git"
 result=$(WORKSPACE_RETRY_STATE="$WORKSPACE_RETRY_STATE" \
   PATH="$WORKSPACE_RETRY_BIN:$PATH" _nvim_lua "
-  vim.env.HOME = '$WORKSPACE_RETRY_HOME'
+  vim.env.HOME = vim.env.WORKSPACE_RETRY_HOME
   local detector = require('config.nvim-workspace').options().workspace.home_workspace_detector
-  print(tostring(detector('$WORKSPACE_RETRY_HOME/.config/shell')))
-  print(detector('$WORKSPACE_RETRY_HOME/.config/shell'))
+  print(tostring(detector(vim.env.WORKSPACE_RETRY_HOME .. '/.config/shell')))
+  print(detector(vim.env.WORKSPACE_RETRY_HOME .. '/.config/shell'))
 ")
 expected="$(printf 'nil\n%s' "$WORKSPACE_RETRY_HOME")"
 _assert_eq "nvim-workspace: failed HOME lookup is retried instead of cached" \
   "$expected" "$result"
 
 WORKSPACE_HOME_FALLBACK=$(_tmpdir)
+export WORKSPACE_HOME_FALLBACK
 WORKSPACE_EMPTY_BIN=$(_tmpdir)
 WORKSPACE_EMPTY_GIT_LOG=$(_tmpdir)/git.log
 mkdir -p "$WORKSPACE_HOME_FALLBACK/.dotfiles"
@@ -1301,11 +1303,11 @@ chmod +x "$WORKSPACE_EMPTY_BIN/git"
 chmod +x "$WORKSPACE_EMPTY_BIN/sley"
 result=$(WORKSPACE_EMPTY_GIT_LOG="$WORKSPACE_EMPTY_GIT_LOG" \
   PATH="$WORKSPACE_EMPTY_BIN:$PATH" _nvim_lua "
-  vim.env.HOME = '$WORKSPACE_HOME_FALLBACK'
+  vim.env.HOME = vim.env.WORKSPACE_HOME_FALLBACK
   local opts = require('config.nvim-workspace').options()
-  print(opts.workspace.home_workspace_detector('$WORKSPACE_HOME_FALLBACK'))
-  print(tostring(opts.workspace.home_workspace_detector('$WORKSPACE_HOME_FALLBACK/.config')))
-  print(tostring(opts.workspace.home_workspace_detector('$WORKSPACE_HOME_FALLBACK/.config')))
+  print(opts.workspace.home_workspace_detector(vim.env.WORKSPACE_HOME_FALLBACK))
+  print(tostring(opts.workspace.home_workspace_detector(vim.env.WORKSPACE_HOME_FALLBACK .. '/.config')))
+  print(tostring(opts.workspace.home_workspace_detector(vim.env.WORKSPACE_HOME_FALLBACK .. '/.config')))
 ")
 expected="$(printf '%s\nnil\nnil' "$WORKSPACE_HOME_FALLBACK")"
 _assert_eq "nvim-workspace: dotfiles home detector only falls back for HOME itself" \

@@ -8,7 +8,7 @@
 #
 # Usage: nvim-keymaps-test
 
-set -o pipefail
+set -eo pipefail
 export NO_COLOR=1
 
 # shellcheck source=nvim/helpers.sh
@@ -23,22 +23,34 @@ _require_nvim_version "nvim-keymaps-test" "$NVIM_TEST_BIN"
 # without also redirecting which keymap modules it loads. Neovim's require
 # searches the config directory's lua/ before package.path, so pin that
 # directory to the same tree.
-NVIM_TEST_LUA_DIR=$HOME/.config/nvim/lua
+export NVIM_TEST_LUA_DIR=$HOME/.config/nvim/lua
 XDG_CONFIG_HOME=$HOME/.config
 export XDG_CONFIG_HOME
+_test_use_headless_runtime || exit "$?"
+_test_use_nvim_state || exit 1
 
-# Run a lua snippet in a bare headless Neovim whose package.path resolves the
-# config modules under test. `-i NONE` keeps concurrent suites off the user's
-# ShaDa file.
-_nvim_lua() {
-  local _output _rc
-  _output=$("$NVIM_TEST_BIN" --headless --noplugin -u NONE -i NONE \
-    -c "lua package.path='$NVIM_TEST_LUA_DIR/?.lua;' .. package.path; $1" \
-    -c 'qa!' 2>&1)
-  _rc=$?
-  _nvim_lf "$_output"
-  return "$_rc"
-}
+probe_status=0
+probe_output=$(_nvim_lua 'error("intentional keymap fixture error")' 2>&1) || probe_status=$?
+_assert_exit 'headless fixture returns a Lua error to the caller' 1 "$probe_status"
+_assert_contains 'headless fixture keeps the Lua diagnostic' \
+  'intentional keymap fixture error' "$probe_output"
+
+quoted_config=$(_tmpdir)/"editor's fixture; ?"
+mkdir "$quoted_config" || exit 1
+printf '%s\n' 'return "module loaded"' >"$quoted_config/fixture_module.lua" || exit 1
+probe_output=$(NVIM_TEST_LUA_DIR="$quoted_config" _nvim_lua 'print(require("fixture_module"))')
+_assert_eq 'headless fixture loads modules from a literal path with punctuation' 'module loaded' "$probe_output"
+
+caller_runtime=$(_tmpdir) || exit 1
+probe_output=$(XDG_RUNTIME_DIR="$caller_runtime" NVIM_LOG_FILE="$caller_runtime/native.log" \
+  NVIM_APPNAME="fixture/$(printf '%080d' 0)" _nvim_lua '
+  assert(vim.fn.getftype(vim.v.servername) == "socket", "expected a running private socket")
+  assert(vim.fn.fnamemodify(vim.fn.stdpath("data"), ":t") == "nvim", "expected the fixture app name")
+  print(vim.v.servername)
+  print(vim.env.NVIM_LOG_FILE)
+')
+_assert_not_contains 'headless fixture avoids caller runtime and native log paths' \
+  "$caller_runtime/" "$probe_output"
 
 # Load the VSCode-style domain under the option values its selection helpers
 # are written against, then run the case.
@@ -448,24 +460,26 @@ _assert_eq "paste: p loads Yanky on demand and keeps the register" \
 
 NVIM_CTRL_S_TMP=$(_tmpdir)
 NVIM_CTRL_S_FILE="$NVIM_CTRL_S_TMP/save.txt"
+export NVIM_CTRL_S_FILE
 result=$(_nvim_vscode_keys "
-  vim.cmd('edit $NVIM_CTRL_S_FILE')
+  vim.cmd('edit ' .. vim.fn.fnameescape(vim.env.NVIM_CTRL_S_FILE))
   vim.api.nvim_buf_set_lines(0, 0, -1, false, {'saved'})
   vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes('<C-s>', true, false, true), 'xt', false)
-  print(table.concat(vim.fn.readfile('$NVIM_CTRL_S_FILE'), '|'))
+  print(table.concat(vim.fn.readfile(vim.env.NVIM_CTRL_S_FILE), '|'))
 ")
 _assert_eq "save: Ctrl-S writes current buffer" "saved" "$result"
 
 NVIM_CTRL_S_INSERT_TMP=$(_tmpdir)
 NVIM_CTRL_S_INSERT_FILE="$NVIM_CTRL_S_INSERT_TMP/save.txt"
+export NVIM_CTRL_S_INSERT_FILE
 result=$(_nvim_vscode_keys "
-  vim.cmd('edit $NVIM_CTRL_S_INSERT_FILE')
+  vim.cmd('edit ' .. vim.fn.fnameescape(vim.env.NVIM_CTRL_S_INSERT_FILE))
   vim.api.nvim_buf_set_lines(0, 0, -1, false, {'abc'})
   vim.api.nvim_win_set_cursor(0, {1, 0})
   vim.cmd('startinsert')
   vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes('<C-s>X', true, false, true), 'xt', false)
   print(vim.api.nvim_get_current_line())
-  print(table.concat(vim.fn.readfile('$NVIM_CTRL_S_INSERT_FILE'), '|'))
+  print(table.concat(vim.fn.readfile(vim.env.NVIM_CTRL_S_INSERT_FILE), '|'))
 ")
 expected="$(printf 'Xabc\nabc')"
 _assert_eq "save: insert Ctrl-S saves and keeps accepting typed text" "$expected" "$result"
@@ -496,9 +510,10 @@ _assert_eq "new buffer: Ctrl-N preserves a populated unnamed buffer" "true||keep
 
 NVIM_CTRL_S_NEW_BUFFER_TMP=$(_tmpdir)
 NVIM_CTRL_S_NEW_BUFFER_FILE="$NVIM_CTRL_S_NEW_BUFFER_TMP/new-buffer.txt"
+export NVIM_CTRL_S_NEW_BUFFER_FILE
 result=$(_nvim_vscode_keys "
   vim.ui.input = function(_, callback)
-    callback('$NVIM_CTRL_S_NEW_BUFFER_FILE')
+    callback(vim.env.NVIM_CTRL_S_NEW_BUFFER_FILE)
   end
   vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes('<C-n>', true, false, true), 'xt', false)
   vim.api.nvim_buf_set_lines(0, 0, -1, false, {'saved new buffer'})
@@ -517,15 +532,16 @@ _assert_eq_realpath_lines "save: Ctrl-N then Ctrl-S leaves no unnamed buffer" "$
 
 NVIM_CTRL_S_UNNAMED_TMP=$(_tmpdir)
 NVIM_CTRL_S_UNNAMED_FILE="$NVIM_CTRL_S_UNNAMED_TMP/new.txt"
+export NVIM_CTRL_S_UNNAMED_FILE
 result=$(_nvim_vscode_keys "
   vim.api.nvim_buf_set_lines(0, 0, -1, false, {'new buffer'})
   vim.ui.input = function(opts, callback)
     print(opts.prompt .. '|' .. tostring(opts.completion))
-    callback('$NVIM_CTRL_S_UNNAMED_FILE')
+    callback(vim.env.NVIM_CTRL_S_UNNAMED_FILE)
   end
   vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes('<C-s>', true, false, true), 'xt', false)
   print(vim.api.nvim_buf_get_name(0))
-  print(table.concat(vim.fn.readfile('$NVIM_CTRL_S_UNNAMED_FILE'), '|'))
+  print(table.concat(vim.fn.readfile(vim.env.NVIM_CTRL_S_UNNAMED_FILE), '|'))
 ")
 expected="$(printf 'Save as: |file\n%s\nnew buffer' "$NVIM_CTRL_S_UNNAMED_FILE")"
 _assert_eq_realpath_lines "save: Ctrl-S prompts and saves an unnamed buffer" "$expected" "$result"
@@ -534,13 +550,14 @@ _assert_eq_realpath_lines "save: Ctrl-S prompts and saves an unnamed buffer" "$e
 # directory instead of writing into the live home or source worktree.
 NVIM_CTRL_S_RELATIVE_HOME=$(_tmpdir)
 NVIM_CTRL_S_RELATIVE_NAME="foobar2"
+export NVIM_CTRL_S_RELATIVE_NAME
 result=$(HOME=$NVIM_CTRL_S_RELATIVE_HOME _nvim_vscode_keys "
   vim.api.nvim_buf_set_lines(0, 0, -1, false, {'home-relative'})
   vim.ui.input = function(_, callback)
-    callback('$NVIM_CTRL_S_RELATIVE_NAME')
+    callback(vim.env.NVIM_CTRL_S_RELATIVE_NAME)
   end
   vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes('<C-s>', true, false, true), 'xt', false)
-  local path = vim.fs.joinpath(vim.fn.expand('~'), '$NVIM_CTRL_S_RELATIVE_NAME')
+  local path = vim.fs.joinpath(vim.fn.expand('~'), vim.env.NVIM_CTRL_S_RELATIVE_NAME)
   print(vim.api.nvim_buf_get_name(0))
   print(table.concat(vim.fn.readfile(path), '|'))
 ")
@@ -550,20 +567,22 @@ _assert_eq_realpath_lines "save: relative filename resolves under HOME" "$expect
 
 NVIM_CTRL_S_ABSOLUTE_TMP=$(_tmpdir)
 NVIM_CTRL_S_ABSOLUTE_FILE="$NVIM_CTRL_S_ABSOLUTE_TMP/absolute path.txt"
+export NVIM_CTRL_S_ABSOLUTE_FILE
 result=$(_nvim_vscode_keys "
   vim.api.nvim_buf_set_lines(0, 0, -1, false, {'absolute'})
   vim.ui.input = function(_, callback)
-    callback('$NVIM_CTRL_S_ABSOLUTE_FILE')
+    callback(vim.env.NVIM_CTRL_S_ABSOLUTE_FILE)
   end
   vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes('<C-s>', true, false, true), 'xt', false)
   print(vim.api.nvim_buf_get_name(0))
-  print(table.concat(vim.fn.readfile('$NVIM_CTRL_S_ABSOLUTE_FILE'), '|'))
+  print(table.concat(vim.fn.readfile(vim.env.NVIM_CTRL_S_ABSOLUTE_FILE), '|'))
 ")
 expected="$(printf '%s\nabsolute' "$NVIM_CTRL_S_ABSOLUTE_FILE")"
 _assert_eq_realpath_lines "save: absolute filename is preserved" "$expected" "$result"
 
 NVIM_CTRL_S_STALE_TMP=$(_tmpdir)
 NVIM_CTRL_S_STALE_FILE="$NVIM_CTRL_S_STALE_TMP/incorrect-target.txt"
+export NVIM_CTRL_S_STALE_FILE
 result=$(_nvim_vscode_keys "
   local callback
   vim.api.nvim_buf_set_lines(0, 0, -1, false, {'original buffer'})
@@ -574,9 +593,9 @@ result=$(_nvim_vscode_keys "
   vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes('<C-s>', true, false, true), 'xt', false)
   vim.cmd('new')
   local replacement = vim.api.nvim_get_current_buf()
-  callback('$NVIM_CTRL_S_STALE_FILE')
+  callback(vim.env.NVIM_CTRL_S_STALE_FILE)
   print(table.concat({
-    tostring(vim.fn.filereadable('$NVIM_CTRL_S_STALE_FILE')),
+    tostring(vim.fn.filereadable(vim.env.NVIM_CTRL_S_STALE_FILE)),
     vim.api.nvim_buf_get_name(original),
     vim.api.nvim_buf_get_lines(original, 0, -1, false)[1],
     tostring(vim.api.nvim_get_current_buf() == replacement),
@@ -587,6 +606,7 @@ _assert_eq "save: stale Save As callback leaves its original buffer and new buff
 
 NVIM_CTRL_S_STALE_INSERT_TMP=$(_tmpdir)
 NVIM_CTRL_S_STALE_INSERT_FILE="$NVIM_CTRL_S_STALE_INSERT_TMP/incorrect-target.txt"
+export NVIM_CTRL_S_STALE_INSERT_FILE
 result=$(_nvim_vscode_keys "
   local callback
   vim.api.nvim_buf_set_lines(0, 0, -1, false, {'original buffer'})
@@ -597,9 +617,9 @@ result=$(_nvim_vscode_keys "
   vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes('i<C-s>', true, false, true), 'xt', false)
   vim.cmd('vsplit')
   local replacement = vim.api.nvim_get_current_win()
-  callback('$NVIM_CTRL_S_STALE_INSERT_FILE')
+  callback(vim.env.NVIM_CTRL_S_STALE_INSERT_FILE)
   print(table.concat({
-    tostring(vim.fn.filereadable('$NVIM_CTRL_S_STALE_INSERT_FILE')),
+    tostring(vim.fn.filereadable(vim.env.NVIM_CTRL_S_STALE_INSERT_FILE)),
     tostring(vim.api.nvim_get_current_win() == replacement),
     vim.fn.mode(),
     vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(original), 0, -1, false)[1],
@@ -610,6 +630,7 @@ _assert_eq "save: stale insert Save As callback does not write or resume in anot
 
 NVIM_CTRL_S_WIPED_TMP=$(_tmpdir)
 NVIM_CTRL_S_WIPED_FILE="$NVIM_CTRL_S_WIPED_TMP/incorrect-target.txt"
+export NVIM_CTRL_S_WIPED_FILE
 result=$(_nvim_vscode_keys "
   local callback
   vim.api.nvim_buf_set_lines(0, 0, -1, false, {'wiped buffer'})
@@ -620,8 +641,8 @@ result=$(_nvim_vscode_keys "
   vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes('<C-s>', true, false, true), 'xt', false)
   vim.cmd('new')
   vim.api.nvim_buf_delete(original, { force = true })
-  callback('$NVIM_CTRL_S_WIPED_FILE')
-  print(tostring(vim.fn.filereadable('$NVIM_CTRL_S_WIPED_FILE')) .. '|' .. tostring(vim.api.nvim_buf_is_valid(original)))
+  callback(vim.env.NVIM_CTRL_S_WIPED_FILE)
+  print(tostring(vim.fn.filereadable(vim.env.NVIM_CTRL_S_WIPED_FILE)) .. '|' .. tostring(vim.api.nvim_buf_is_valid(original)))
 ")
 _assert_eq "save: wiped Save As origin ignores a delayed callback" "0|false" "$result"
 
@@ -647,19 +668,20 @@ _assert_eq "save: empty unnamed-buffer filename is a no-op" "|empty" "$result"
 
 NVIM_CTRL_S_UNNAMED_INSERT_TMP=$(_tmpdir)
 NVIM_CTRL_S_UNNAMED_INSERT_FILE="$NVIM_CTRL_S_UNNAMED_INSERT_TMP/new.txt"
+export NVIM_CTRL_S_UNNAMED_INSERT_FILE
 result=$(_nvim_vscode_keys "
   vim.api.nvim_buf_set_lines(0, 0, -1, false, {'abc'})
   vim.ui.input = function(_, callback)
     vim.schedule(function()
-      callback('$NVIM_CTRL_S_UNNAMED_INSERT_FILE')
+      callback(vim.env.NVIM_CTRL_S_UNNAMED_INSERT_FILE)
     end)
   end
   vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes('i<C-s>', true, false, true), 'xt', false)
   vim.wait(100, function()
-    return vim.fn.filereadable('$NVIM_CTRL_S_UNNAMED_INSERT_FILE') == 1
+    return vim.fn.filereadable(vim.env.NVIM_CTRL_S_UNNAMED_INSERT_FILE) == 1
   end)
   print(vim.api.nvim_buf_get_name(0))
-  print(table.concat(vim.fn.readfile('$NVIM_CTRL_S_UNNAMED_INSERT_FILE'), '|'))
+  print(table.concat(vim.fn.readfile(vim.env.NVIM_CTRL_S_UNNAMED_INSERT_FILE), '|'))
 ")
 expected="$(printf '%s\nabc' "$NVIM_CTRL_S_UNNAMED_INSERT_FILE")"
 _assert_eq_realpath_lines "save: insert Ctrl-S prompts and saves an unnamed buffer" "$expected" "$result"
