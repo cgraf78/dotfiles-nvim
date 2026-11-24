@@ -9,7 +9,12 @@
 # exists but is not declared would otherwise silently drop out of CI.
 validate_suite_inventory() {
   local root=$1 inventory=$2 source_root=$3 entry suite relative_suite suite_name
-  while IFS= read -r entry || [[ -n $entry ]]; do
+  local declared='' discovered entries
+  entries=$(cat -- "$inventory") || {
+    echo "could not read suite inventory: $inventory" >&2
+    return 1
+  }
+  while IFS= read -r entry; do
     case $entry in '' | \#*) continue ;; esac
     [[ $entry =~ ^home/\.local/lib/dotfiles/tests/[a-z0-9][a-z0-9-]*-test$ ]] || {
       echo "invalid suite inventory entry: $entry" >&2
@@ -20,15 +25,28 @@ validate_suite_inventory() {
       return 1
     }
     suite_name=${entry##*/}
-    printf '%s\n' "${suite_name%-test}"
-  done <"$inventory"
-  [[ ! -d $root ]] || while IFS= read -r suite; do
-    relative_suite=${suite#"$source_root"/}
-    grep -Fx "$relative_suite" "$inventory" >/dev/null || {
-      echo "unlisted executable suite: $relative_suite" >&2
+    declared+="${suite_name%-test}"$'\n'
+  done <<<"$entries"
+  if [[ -d $root ]]; then
+    # Process substitution hides a traversal error from the consuming loop.
+    # Buffer names until both sides of discovery have been checked.
+    discovered=$(
+      set -o pipefail
+      find "$root" -type f -name '*-test' -perm -u+x -print | LC_ALL=C sort
+    ) || {
+      echo "could not discover executable suites under $root" >&2
       return 1
     }
-  done < <(find "$root" -type f -name '*-test' -perm -u+x -print | LC_ALL=C sort)
+    while IFS= read -r suite; do
+      [[ -n $suite ]] || continue
+      relative_suite=${suite#"$source_root"/}
+      grep -Fx -- "$relative_suite" <<<"$entries" >/dev/null || {
+        echo "unlisted executable suite: $relative_suite" >&2
+        return 1
+      }
+    done <<<"$discovered"
+  fi
+  printf '%s' "$declared"
 }
 
 suite_inventory_self_test() {
@@ -50,7 +68,33 @@ suite_inventory_self_test() {
   fi
   rm "$root/unlisted-test"
   output=$(validate_suite_inventory "$root" "$inventory" "$tmp/repo")
-  [[ $output == declared ]]
+  [[ $output == declared ]] || return 1
+
+  # An absent suite directory can describe an empty inventory only after
+  # the inventory file itself has been read successfully.
+  if validate_suite_inventory "$tmp/absent-suites" "$tmp/absent-inventory" "$tmp/repo" \
+    >/dev/null 2>&1; then
+    echo 'suite inventory accepted a missing declaration file' >&2
+    return 1
+  fi
+
+  # Traversal can fail after emitting the expected paths. A partial inventory
+  # must not be accepted or handed to the runner as a complete suite list.
+  if output=$(
+    find() {
+      command find "$@" || return
+      return 73
+    }
+    validate_suite_inventory "$root" "$inventory" "$tmp/repo" 2>"$tmp/discovery-error"
+  ); then
+    echo 'suite inventory accepted failed discovery' >&2
+    return 1
+  fi
+  if [[ -n $output ]]; then
+    echo 'suite inventory printed suites after failed discovery' >&2
+    return 1
+  fi
+  grep -Fq 'could not discover executable suites' "$tmp/discovery-error"
 }
 
 # Sourcing callers own their shell options; only a direct run opts into strict
