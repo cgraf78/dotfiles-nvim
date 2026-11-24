@@ -248,9 +248,10 @@ _test_use_host_runtime_dirs() {
     link_inventory=$(_tmpfile) || return 1
     find "$XDG_DATA_HOME/nvim" -type l -print0 >"$link_inventory" || return 1
     while IFS= read -r -d '' link; do
-      # Keep terminal newlines in link targets as well as in link names.
-      target=$(readlink "$link" && printf '.') || return 1
-      target=${target%$'\n.'}
+      # GNU and macOS readlink append different delimiters when a target
+      # ends in a newline. Ask for only the target before adding our marker.
+      target=$(readlink -n "$link" && printf '.') || return 1
+      target=${target%.}
       case $target in
         "$host_data/lazy" | "$host_data/lazy/"* | "$host_data/site" | "$host_data/site/"*)
           private_target=${target#"$host_data"/}
