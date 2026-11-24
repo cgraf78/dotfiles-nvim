@@ -18,10 +18,11 @@
 _capability_dot_release_valid_repo() {
   case ${1:-} in
     '' | *[!A-Za-z0-9._/-]* | */*/* | /* | */ | *..*)
-      echo "invalid Dot test release repository: ${1:-}" >&2
-      return 1
       ;;
+    */*) return 0 ;;
   esac
+  echo "invalid Dot test release repository: ${1:-}" >&2
+  return 1
 }
 
 # Map this machine to the Dot release platform suffix. Mirrors the base
@@ -74,8 +75,8 @@ _capability_dot_release_destination() {
     echo "Dot release $operation is missing the destination" >&2
     return 1
   }
-  mkdir -p "$dest" || return
-  entries=$(ls -A "$dest") || return
+  mkdir -p -- "$dest" || return
+  entries=$(ls -A -- "$dest") || return
   [[ -z $entries ]] || {
     echo "refusing to $operation into a nonempty directory: $dest" >&2
     return 1
@@ -133,31 +134,36 @@ capability_dot_release_extract() {
   fi
 }
 
-# Resolve the newest published Dot release tag through the anonymous web
-# redirect (/releases/latest -> /releases/tag/<tag>), without touching
-# api.github.com. Mirrors the base resolver, including repository and
-# release-grammar validation; the caller re-validates to cover explicit
-# tags as well.
-_capability_dot_release_latest_tag() {
-  local repo=${1:-} effective tag
+# Print the repository's latest published Dot tag using the anonymous web
+# redirect. The GitHub credential remains available for the exact assets.
+capability_dot_release_latest_tag() {
+  local repo=${1:-} releases response effective tag status=0
   [[ -n $repo ]] || {
     echo 'Dot latest-tag lookup is missing the repository' >&2
     return 1
   }
   _capability_dot_release_valid_repo "$repo" || return 1
-  effective=$(curl -q -fsSIL -o /dev/null -w '%{url_effective}' \
+  releases=https://github.com/$repo/releases
+  response=$(curl -q -fsSIL -o /dev/null -w '%{http_code} %{url_effective}' \
     --proto '=https' --proto-redir '=https' --connect-timeout 10 --max-time 30 \
     --retry 2 --retry-delay 2 --retry-max-time 65 --retry-all-errors \
-    "https://github.com/$repo/releases/latest") || {
-    echo "could not resolve the latest Dot release for $repo" >&2
-    return 1
-  }
-  tag=${effective##*/}
-  [[ $effective != */releases || $tag != releases ]] || {
+    "$releases/latest") || status=$?
+  # Curl can report success when Retry-After exceeds the retry window even
+  # though the final response was an HTTP error.
+  case "$status:$response" in
+    0:2[0-9][0-9]\ *) effective=${response#* } ;;
+    *)
+      printf 'could not resolve the latest Dot release for %s (curl exit %s, HTTP %s)\n' \
+        "$repo" "$status" "${response%% *}" >&2
+      return 1
+      ;;
+  esac
+  [[ $effective != "$releases" ]] || {
     echo "Dot repository has no releases yet: $repo" >&2
     return 1
   }
-  [[ $tag =~ ^[0-9]{8}-[0-9]{6}-[0-9a-f]{8}$ ]] || {
+  tag=${effective#"$releases/tag/"}
+  [[ $effective == "$releases/tag/"* && $tag =~ ^[0-9]{8}-[0-9]{6}-[0-9a-f]{8}$ ]] || {
     echo "unexpected latest-release redirect: $effective" >&2
     return 1
   }
@@ -172,7 +178,7 @@ capability_dot_release_stage() (
   repo=${DOT_TEST_DOT_RELEASE_REPO:-cgraf78/dot}
   _capability_dot_release_valid_repo "$repo" || return 1
   if [[ $request == latest ]]; then
-    tag=$(_capability_dot_release_latest_tag "$repo") || return 1
+    tag=$(capability_dot_release_latest_tag "$repo") || return 1
   else
     tag=$request
   fi
@@ -182,6 +188,8 @@ capability_dot_release_stage() (
   }
   platform=$(_capability_dot_release_platform) || return 1
   _capability_dot_release_destination "$dest" stage || return
+  # Keep relative destinations anchored here, including a literal "-".
+  [[ $dest == /* ]] || dest="./$dest"
   dest=$(cd -P -- "$dest" && pwd -P) || return
   scratch=$(mktemp -d "$dest/.dot-release.XXXXXX") || return
   trap 'rm -rf -- "$scratch"' EXIT
